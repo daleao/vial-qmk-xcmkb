@@ -1,10 +1,5 @@
 #pragma once
-#include "encoder.c"
-
-
 //Debug Manager//
-//#define DEBUG_ENABLE
-//#define CONSOLE_ENABLE
 #define SERIAL_NUMBER_USE_HARDWARE_ID TRUE    
 
 #define OLED_BRIGHTNESS 100
@@ -18,7 +13,6 @@
 #define DIGITIZER_RIGHT
 
 
-
 #ifdef DIP_SWITCH_ENABLE
 
 #define DIP_SWITCH_PINS { GP12 }
@@ -27,7 +21,7 @@
 #endif
 
 
-/* key matrix size */
+/* Key matrix size */
 // Rows are doubled-up
 #define MATRIX_ROWS 10 
 #define MATRIX_COLS 7 /*original 6*/
@@ -40,7 +34,7 @@
 /* Define layer number */
 #define DYNAMIC_KEYMAP_LAYER_COUNT 10
 
-/*Follow for gaming*/
+/* Follow for gaming */
 #define USB_POLLING_INTERVAL_MS 1
 
 
@@ -69,14 +63,11 @@
 #define DYNAMIC_KEYMAP_EEPROM_MAX_ADDR 32767  // Allow more Vial remaps
 
 // NKRO removed
-
 // Vial Support (UID moved to rules.mk)
 
 #define SUPER_ALT_TAB_ENABLE	//Enable super alt tab custom keycode(+178).
 
-
 /* Maximum of combo, tap dance in vial */
-
 #ifdef VIAL_ENABLE
 #define DYNAMIC_KEYMAP_MACRO_COUNT 32
 #define VIAL_TAP_DANCE_ENTRIES 32
@@ -92,8 +83,6 @@
 
 
 #define WS2812_DI_PIN GP0
-
-
 
 
 #ifdef RGB_MATRIX_ENABLE
@@ -156,10 +145,9 @@
 #define ENABLE_RGB_MATRIX_TYPING_HEATMAP
 #define ENABLE_RGB_MATRIX_DIGITAL_RAIN 
 
-#define ENABLE_RGB_MATRIX_SOLID_REACTIVE_SIMPLE
 //These modes also require the RGB_MATRIX_FRAMEBUFFER_EFFECTS define to be available.
-#define ENABLE_RGB_MATRIX_SOLID_REACTIVE_SIMPLE
 #define ENABLE_RGB_MATRIX_SOLID_REACTIVE
+#define ENABLE_RGB_MATRIX_SOLID_REACTIVE_SIMPLE
 #define ENABLE_RGB_MATRIX_SOLID_REACTIVE_WIDE
 #define ENABLE_RGB_MATRIX_SOLID_REACTIVE_MULTIWIDE
 #define ENABLE_RGB_MATRIX_SOLID_REACTIVE_CROSS

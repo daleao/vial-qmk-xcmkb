@@ -121,15 +121,19 @@
 
 // Unfortunately, some applications drop or misorder fast key events. This is a
 // partial fix to slow down the rate at which macros are sent.
+#undef TAP_CODE_DELAY
 #define TAP_CODE_DELAY 5
 
 // Tap-hold configuration for home row mods.
+// TAPPING_TERM_PER_KEY and CHORDAL_HOLD are forced by build_vial.mk — no need to redefine.
 #define TAPPING_TERM 240
-#define TAPPING_TERM_PER_KEY
+#undef FLOW_TAP_TERM
 #define FLOW_TAP_TERM 100
-#define CHORDAL_HOLD
 #define PERMISSIVE_HOLD
 #define SPECULATIVE_HOLD
+#define SPECULATIVE_HOLD_ONE_KEY
+#define SPECULATIVE_HOLD_FLOW_TERM 200
+
 #define RETRO_TAPPING
 
 // Vendor settings

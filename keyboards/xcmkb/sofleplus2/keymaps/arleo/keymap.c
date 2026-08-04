@@ -187,10 +187,10 @@ enum keycode_aliases {
 
 // ==================== State Variables ====================
 
-int16_t     scroll_speed     = DEFAULT_SCROLL_SPEED;
 static bool trackpad_enabled = true;
-int16_t     scroll_dir_v     = 0;
-int16_t     scroll_dir_h     = 0;
+static int16_t scroll_speed     = DEFAULT_SCROLL_SPEED;
+static int16_t     scroll_dir_v     = 0;
+static int16_t     scroll_dir_h     = 0;
 
 // Sniper mode state
 #define LEARNING_TIMEOUT 5000
@@ -754,7 +754,7 @@ void housekeeping_task_user(void) {
     }
 
     /* ---- Runtime bootloader trigger ----
-     * Hold the 3 outermost top-row keys on this half for 3 s to enter the bootloader.
+     * Hold the 3 outermost top-row keys on this half for 3s to enter the bootloader.
      *   Left half:  KC_GRAVE + KC_1 + KC_2  (matrix r0c0, r0c1, r0c2)
      *   Right half: MS_BTN1 + MS_UP + KC_9  (matrix r5c0, r5c1, r5c2)
      * Each MCU checks its own keys and jumps independently.
@@ -772,7 +772,7 @@ void housekeeping_task_user(void) {
         if (bl_trigger) {
             if (bl_hold_start == 0)
                 bl_hold_start = timer_read32();
-            else if (timer_elapsed32(bl_hold_start) >= 2000)
+            else if (timer_elapsed32(bl_hold_start) >= 3000)
                 bootloader_jump();
         } else {
             bl_hold_start = 0;
@@ -1206,6 +1206,24 @@ Magic used after keypress:
     . *   -> ../             (shell)
 */
 
+// Forget Shift on most letters so that repeating a shifted letter doesn't
+// produce ALL-CAPS. Excludes I, N, Z (useful for Vim "NN", "ZZ" patterns).
+bool remember_last_key_user(uint16_t keycode, keyrecord_t *record, uint8_t *remembered_mods) {
+    keycode = get_tap_keycode(keycode);
+
+    switch (keycode) {
+        case KC_A ... KC_H:
+        case KC_K ... KC_M:
+        case KC_O ... KC_U:
+            if ((*remembered_mods & ~(MOD_MASK_SHIFT | MOD_BIT_RALT)) == 0) {
+                *remembered_mods &= ~MOD_MASK_SHIFT;
+            }
+            break;
+    }
+
+    return true;
+}
+
 uint16_t get_alt_repeat_key_keycode_user_override(uint16_t keycode, uint8_t mods) {
     // Custom Magic Key implementation.
     // Return KC_TRNS to fall back to Vial's dynamic alt repeat key table.
@@ -1269,8 +1287,6 @@ uint16_t get_alt_repeat_key_keycode_user_override(uint16_t keycode, uint8_t mods
                 return MG_ES; // X -> ES
             case KC_COMM:
                 return MG_SP_BUT; // , -> " BUT"
-            case KC_1 ... KC_0:
-                return KC_DOT; // # -> .
 
             case KC_QUOT:
                 return MG_DOCSTR; // " -> ""<cursor>"""
@@ -2036,7 +2052,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             MAGIC_STRING(/*,*/ " but", KC_SPC);
             break;
         case MG_THE:
-            MAGIC_STRING(/* */ "the", KC_SPC);
+            MAGIC_STRING(/* */ "the", KC_N); // spc * @ -> "then"
             break;
 
         case MG_DOCSTR:
@@ -2138,12 +2154,15 @@ static const char PROGMEM gesture_scroll[] = {
 
 static const char gesture_blank[64] PROGMEM = {0};
 
+/*
 static const char *get_trackpad_gesture_bitmap(uint8_t layer) {
     if (user_config.scroll_layers & (1 << layer)) return gesture_scroll;
     if (user_config.swipe2_layers & (1 << layer)) return gesture_2finger;
     if (user_config.swipe3_layers & (1 << layer)) return gesture_3finger;
     return gesture_default;
 }
+*/
+
 static const char *get_trackpad_gesture_bitmap_by_mode(uint8_t mode) {
     switch (mode) {
         case 1:

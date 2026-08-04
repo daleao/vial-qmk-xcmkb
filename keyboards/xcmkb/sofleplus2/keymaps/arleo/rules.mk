@@ -6,22 +6,19 @@ CAPS_WORD_ENABLE = yes
 TRI_LAYER_ENABLE = yes
 LEADER_ENABLE = yes
 
-
 ########### VIA VIAL ###########
-
 VIA_ENABLE = yes
 VIAL_ENABLE = yes
 VIAL_INSECURE = yes
 VIAL_ENCODERS_ENABLE = yes
-VIAL_KEYBOARD_UID = {0x8A,0x61,0xD4,0x37,0xFC,0x15,0x9B,0x42}
 VIAL_USER_CONFIG_ENABLE = yes
 
 QMK_SETTINGS = yes
 COMBO_ENABLE = yes
 TAP_DANCE_ENABLE = yes
 KEY_OVERRIDE_ENABLE = yes
-########### PLUS ###########
 
+########### PLUS ###########
 # macOS dual-mode: mouse fallback for non-PTP hosts (macOS/Linux)
 POINTING_DEVICE_ENABLE = yes
 POINTING_DEVICE_DRIVER = digitizer
@@ -43,8 +40,6 @@ UCIS_ENABLE = no
 UNICODE_COMMON = yes
 
 ########### SQUEEZING AVR ###########
-CONSOLE_ENABLE = no
-COMMAND_ENABLE = no
 MOUSEKEY_ENABLE = no
 SPACE_CADET_ENABLE = no
 GRAVE_ESC_ENABLE = no 
