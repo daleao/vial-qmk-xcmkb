@@ -339,7 +339,19 @@ bool get_chordal_hold(uint16_t tap_hold_keycode, keyrecord_t* tap_hold_record,
     return true;
 }
 
+/* Weak user callback for flow tap term override.
+ * Return UINT16_MAX to fall back to Vial's dynamic flow tap term. */
+__attribute__((weak)) uint16_t get_flow_tap_term_user(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode) {
+    return UINT16_MAX; // No override, use Vial default
+}
+
 uint16_t get_flow_tap_term(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode) {
+    /* User override takes priority */
+    uint16_t user_term = get_flow_tap_term_user(keycode, record, prev_keycode);
+    if (user_term != UINT16_MAX) {
+        return user_term;
+    }
+
     if (is_flow_tap_key(keycode) && is_flow_tap_key(prev_keycode)) {
         return QS.flow_tap_term;
     }

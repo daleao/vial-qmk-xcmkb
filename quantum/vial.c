@@ -526,7 +526,19 @@ static void reload_tap_dance(void) {
 #endif
 
 #ifdef TAPPING_TERM_PER_KEY
+/* Weak user callback for tapping term override.
+ * Return 0 to fall back to Vial's dynamic tapping term. */
+__attribute__((weak)) uint16_t get_tapping_term_user(uint16_t keycode, keyrecord_t *record) {
+    return 0; // No override, use Vial default
+}
+
 uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
+    /* User override takes priority */
+    uint16_t user_term = get_tapping_term_user(keycode, record);
+    if (user_term != 0) {
+        return user_term;
+    }
+
 #ifdef VIAL_TAP_DANCE_ENABLE
     if (keycode >= QK_TAP_DANCE && keycode <= QK_TAP_DANCE_MAX) {
         vial_tap_dance_entry_t td;
@@ -728,7 +740,20 @@ static bool alt_repeat_key_mods_match(uint8_t mods, uint8_t required_mods, uint8
     return (mods & required_mods) == required_mods && (mods & ~allowed_mods) == 0;
 }
 
+/* Weak user callback for alt repeat key override.
+ * Return KC_TRNS to fall back to Vial's dynamic alt repeat key. */
+__attribute__((weak)) uint16_t get_alt_repeat_key_keycode_user_override(uint16_t keycode, uint8_t mods) {
+    return KC_TRNS; // No override, use Vial default
+}
+
 uint16_t get_alt_repeat_key_keycode_user(uint16_t keycode, uint8_t mods) {
+    /* User override takes priority */
+    uint16_t user_keycode = get_alt_repeat_key_keycode_user_override(keycode, mods);
+    if (user_keycode != KC_TRNS) {
+        return user_keycode;
+    }
+
+    /* Fall back to Vial's dynamic implementation */
     uint16_t alt_keycode = KC_TRNS;
     int8_t best_fit = -1;
 

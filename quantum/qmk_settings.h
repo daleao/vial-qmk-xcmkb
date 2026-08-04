@@ -234,6 +234,11 @@ extern qmk_settings_t QS;
 
 #endif
 
+/* User override callback for flow tap term.
+ * Implement this in your keymap to provide per-key flow tap term overrides.
+ * Return UINT16_MAX to fall back to Vial's dynamic flow tap term. */
+uint16_t get_flow_tap_term_user(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode);
+
 #if defined(__AVR__) && defined(QMK_SETTINGS)
 #include <util/delay.h>
 static inline void qs_wait_ms(uint16_t timer) {
