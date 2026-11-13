@@ -1,5 +1,38 @@
 #include "sofleplus2.h"
 
+#if defined(XCMKB_DTR_MODE) && XCMKB_DTR_MODE == 2
+/* Settled double-tap reset (see post_config.h). Replaces the stock __late_init of
+ * platforms/chibios/bootloaders/rp2040.c, which post_config.h has switched off. The first
+ * XCMKB_DTR_SETTLE_MS after reset are unarmed, so plug-in contact bounce just reboots.
+ * A manual double-tap still works: the second tap 0.3-0.8 s after the first. */
+#    include "hal.h"
+#    include "wait.h"
+#    include "pico/bootrom.h"
+
+#    ifdef RP2040_BOOTLOADER_DOUBLE_TAP_RESET_LED
+#        define XCMKB_DTR_LED_MASK (1U << RP2040_BOOTLOADER_DOUBLE_TAP_RESET_LED)
+#    else
+#        define XCMKB_DTR_LED_MASK 0U
+#    endif
+
+static volatile uint32_t __attribute__((section(".ram0.xcmkb_dtr_magic"))) xcmkb_dtr_magic; /* NOLOAD: survives reset */
+#    define XCMKB_DTR_TOKEN 0xCAFEB0BAu
+
+void __late_init(void) {
+    clocks_init(); /* required before reset_usb_boot(), as in the stock code */
+
+    if (xcmkb_dtr_magic == XCMKB_DTR_TOKEN) {
+        xcmkb_dtr_magic = 0;
+        reset_usb_boot(XCMKB_DTR_LED_MASK, 0U);
+    }
+    xcmkb_dtr_magic = 0;
+    wait_us(XCMKB_DTR_SETTLE_MS * 1000U);
+    xcmkb_dtr_magic = XCMKB_DTR_TOKEN;
+    wait_us(XCMKB_DTR_WINDOW_MS * 1000U);
+    xcmkb_dtr_magic = 0;
+}
+#endif
+
 // RP2040 PAD register: slow down GP0 (WS2812 DIN) output edges.
 // Without C17630 (330Ω series resistor on DIN), fast GPIO edges radiate onto
 // adjacent I2C traces (GP2/GP3), corrupting LED data during IQS5xx touch reads

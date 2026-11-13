@@ -78,7 +78,7 @@
 
 /* --- v5.10 PHANTOM-CLICK FIX (RELEASE) --------------------------------------
  * Two independent changes: one removes the cause, one hides what is left.
- * Full investigation record kept in local notes; the driver header
+ * The driver header
  * (drivers/sensors/azoteq_iqs5xx.h) carries the datasheet argument for each.
  *
  * IDLE_RESEED -- the cause. Datasheet 3.4 refreshes the trackpad's per-channel
@@ -205,7 +205,7 @@
  * The version is compared by equality with the manifest's latest, so a release
  * changes ONLY the version token. Never rename the batch words. */
 #undef PRODUCT
-#define PRODUCT "SoflePLUS2 TPS65 v5.10"
+#define PRODUCT "SoflePLUS2 TPS65 v5.11b"
 
 
 
@@ -213,3 +213,13 @@
 #ifdef VIAL_ENABLE
 #define VIAL_KEYBOARD_UID {0x6B, 0xE4, 0x29, 0xC7, 0x5D, 0x18, 0xA3, 0xF0}
 #endif
+
+/* --- v5.11 ---------------------------------------------------------------------
+ * Split messages for the per-LED indicator colours and the wake-up animation
+ * (keymap.c). The board config.h lists the v5.10 set; extend it here. */
+#undef SPLIT_TRANSACTION_IDS_USER
+#define SPLIT_TRANSACTION_IDS_USER VIALRGB_DIRECT_SYNC, VIALRGB_INDICATOR_SYNC, OLED_SCREEN_B_SYNC, TP_INFO_SYNC, VIALRGB_INDICATOR_LED_SYNC, AURORA_SYNC
+
+/* Wake-up "Aurora tide" animation on plug-in / PC start-up (keymap.c). Comment
+ * out to drop it entirely. */
+#define AURORA_WAKE_ENABLE

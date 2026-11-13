@@ -20,9 +20,8 @@
 
 #pragma once
 
-
 #define EE_HANDS
-//#define INIT_EE_HANDS_LEFT       // Auto-program EEPROM as LEFT on every boot (survives EEPROM resets)
+//#define INIT_EE_HANDS_RIGHT   // Auto-program EEPROM as LEFT on every boot (survives EEPROM resets)
 //#define MASTER_LEFT
 //#define MASTER_RIGHT
 #define USB_VBUS_PIN GP19
@@ -36,14 +35,15 @@
 #define I2C_DRIVER I2CD1
 #define I2C1_SDA_PIN GP2
 #define I2C1_SCL_PIN GP3
-#define I2C1_CLOCK_SPEED 1000000  // 1MHz FM+ — same board as TPS43; halves I2C hold time per read, reducing OLED lag from shared bus contention
+#define I2C1_CLOCK_SPEED 1000000  
 
-#define AZOTEQ_IQS5XX_TPS65
-#define AZOTEQ_IQS5XX_REPORT_RATE 9 //test from 9 to 5, 5 higher polling rate. 9 stable rgb led
-#define AZOTEQ_IQS5XX_ROTATION_270 /*for tps65*/
-#define POINTING_DEVICE_TASK_THROTTLE_MS (AZOTEQ_IQS5XX_REPORT_RATE + 1)
+//#define AZOTEQ_IQS5XX_TPS65
+#define AZOTEQ_IQS5XX_REPORT_RATE 9
+//#define AZOTEQ_IQS5XX_ROTATION_270 /*for tps65*/
 #define DIGITIZER_TASK_THROTTLE_MS (AZOTEQ_IQS5XX_REPORT_RATE + 1)
 //#define AZOTEQ_IQS5XX_ROTATION_90 /*for tps65 rotate version*/
+#define AZOTEQ_IQS5XX_TPS43
+#define AZOTEQ_IQS5XX_ROTATION_180 /*for tps43*/
 
 /* v5.07 RDY/RST experiment (this keymap only) — hand-wired IQS5xx lines:
  *   GP13 = RDY (comm-window strobe), GP14 = RST (active-low hard reset).
@@ -51,11 +51,13 @@
  * the actual gating logic is the edge-triggered override in trackpad_rdy_rst.c
  * (one clean read per RDY rising edge = window-open moment; the other half is
  * paced by timer, never by the floating pin — both were failure modes of the
- * stock level-gate in earlier tests). NOTE: defining DIGITIZER_MOTION_PIN makes
- * quantum/digitizer.c ignore DIGITIZER_TASK_THROTTLE_MS above; pacing comes
- * from RDY edges, with automatic fallback to timed polling if RDY goes silent.
- * RST: pulsed at boot (pre-init, so the driver's register config survives) and
- * used for capped auto-recovery when RDY stops strobing. */
+ * stock level-gate in earlier tests). This replaces the old v5.06 "pure 10ms
+ * polling" approach: the ~200us post-END_COMMS RDY race that motivated it
+ * doesn't exist for rising-edge reads. NOTE: defining DIGITIZER_MOTION_PIN
+ * makes quantum/digitizer.c ignore DIGITIZER_TASK_THROTTLE_MS above; pacing
+ * comes from RDY edges, with automatic fallback to timed polling if RDY goes
+ * silent. RST: pulsed at boot (pre-init, so the driver's register config
+ * survives) and used for capped auto-recovery when RDY stops strobing. */
 #define DIGITIZER_MOTION_PIN GP13
 #define TRACKPAD_RST_PIN GP14
 
@@ -65,12 +67,12 @@
 // https://github.com/qmk/qmk_firmware/blob/master/docs/feature_pointing_device.md#gesture-settings
 /* azoteq config: optimized for larger TPS65 dimensions */
 #define AZOTEQ_IQS5XX_HOLD_TIME 300 // Default 300 v3.02
-#define AZOTEQ_IQS5XX_SCROLL_INITIAL_DISTANCE 10 // Standard distance for larger TPS65 trackpad
+#define AZOTEQ_IQS5XX_SCROLL_INITIAL_DISTANCE 10 // ~0.21mm (TPS43: 47.6 units/mm; same physical distance as TPS65 — resolution per mm is identical)
 #define AZOTEQ_IQS5XX_PRESS_AND_HOLD_ENABLE false // Disabled: Windows PTP handles this natively; hardware gesture conflicts with PTP causing phantom drag
 #define AZOTEQ_IQS5XX_TWO_FINGER_TAP_ENABLE false // Disabled: Windows PTP handles 2-finger right-click natively; hardware gesture causes double right-click
 #define AZOTEQ_IQS5XX_SCROLL_ENABLE true
 #define AZOTEQ_IQS5XX_ZOOM_ENABLE true //(Optional) Enable zoom gestures Zoom Out (Mouse Button 7) / Zoom In (Mouse Button 8)
-// Zoom thresholds: TPS65 = 47.3 units/mm. Default initial=50 (~1mm) fires during normal scroll.
+// Zoom thresholds: TPS43 = 47.6 units/mm. Default initial=50 (~1mm) fires during normal scroll.
 // Raised to ~3mm initial so only deliberate pinch/spread triggers zoom, not scroll finger variation.
 #define AZOTEQ_IQS5XX_ZOOM_INITIAL_DISTANCE 150     // ~3.2mm span change to start zoom (default 50)
 #define AZOTEQ_IQS5XX_ZOOM_CONSECUTIVE_DISTANCE 80  // ~1.7mm per step once zoom is active (default 25)
@@ -117,15 +119,15 @@
 #define AZOTEQ_IQS5XX_SWIPE_Y_ENABLE false
 
 /* macOS-friendly 3-finger swipe keycodes (mouse fallback mode only, Windows PTP unaffected) */
-/* ROTATION_270: physical RIGHT → decreasing digitizer x → invert x for correct native swipe direction */
-#define DIGITIZER_SWIPE_X_INVERT 1
+/* Swipe left/right are reversed because TPS43 uses ROTATION_180 which flips X axis */
 #define DIGITIZER_SWIPE_UP_KC    LCTL(KC_UP)     // macOS Mission Control
 #define DIGITIZER_SWIPE_DOWN_KC  LCTL(KC_DOWN)   // macOS App Exposé
-#define DIGITIZER_SWIPE_LEFT_KC  LCTL(KC_LEFT)   // macOS Previous Desktop
-#define DIGITIZER_SWIPE_RIGHT_KC LCTL(KC_RIGHT)  // macOS Next Desktop
+#define DIGITIZER_SWIPE_LEFT_KC  LCTL(KC_RIGHT)  // macOS Next Desktop (reversed for ROTATION_180)
+#define DIGITIZER_SWIPE_RIGHT_KC LCTL(KC_LEFT)   // macOS Previous Desktop (reversed for ROTATION_180)
 
-/* Mouse fallback tuning for macOS */
+/* Mouse fallback tuning for macOS (ROTATION_180 flips axes) */
 #define DIGITIZER_SCROLL_INVERT true            // Natural scrolling for macOS
+
 
 
 
@@ -143,7 +145,7 @@
    * trackpad that goes with it. Do not re-enable. */
   // #define OS_DETECTION_KEYBOARD_RESET
 
-  // Only send one report per OS detection cycle
+  // Only send one report per OS detection cycle  
   #define OS_DETECTION_SINGLE_REPORT
 
   // Extended timeouts to prevent login loops on Linux systems
@@ -181,8 +183,7 @@
  * Indicators track the Vial brightness slider but render at this % of the
  * ceiling, so a steady indicator doesn't out-shine the (usually sub-ceiling)
  * RGB effects. 100 = full ceiling; lower = dimmer indicators. */
-#define INDICATOR_BRIGHTNESS_PCT 65
-
+#define INDICATOR_BRIGHTNESS_PCT 60
 
 
 
@@ -205,13 +206,30 @@
  * The version is compared by equality with the manifest's latest, so a release
  * changes ONLY the version token. Never rename the batch words. */
 #undef PRODUCT
-#define PRODUCT "SoflePLUS2 TPS65 v5.11"
+#define PRODUCT "SoflePLUS2 TPS43 v5.11b"
+
+/* USB Product ID -- distinct per variant so several boards can be plugged in at
+ * once. builddefs/build_vial.mk force-defines SERIAL_NUMBER="vial:f64c2b3c" on
+ * EVERY Vial build, and usb_descriptor.c prefers that static string over the
+ * per-MCU hardware ID, so every board reports the same serial. Windows collapses
+ * identical VID+PID+serial into one device instance, which is why a second board
+ * silently fails to appear. The serial cannot be changed -- the Vial app finds a
+ * keyboard by the "vial:" prefix -- so the PID is the only lever that does not
+ * require editing core.
+ *
+ * Allocation: 0x0287 board default = tps65-510 (vertical), 0x0288 = tps65-510h
+ * (horizontal), 0x0289 = tps43-510. SCOPE: the PID is in the FIRMWARE, not the
+ * unit, so two boards both flashed tps65-510h still collide; per-unit
+ * coexistence needs a unique serial, i.e. a separate build per board.
+ * Keymap config.h is last in QMK's config chain, so it overrides keyboard.json. */
+#undef  PRODUCT_ID
+#define PRODUCT_ID 0x0289
 
 
 
 /* Vial UID for this specific keymap (unique — was still 506's UID after copy) */
 #ifdef VIAL_ENABLE
-#define VIAL_KEYBOARD_UID {0x6B, 0xE4, 0x29, 0xC7, 0x5D, 0x18, 0xA3, 0xF0}
+#define VIAL_KEYBOARD_UID {0xD9, 0x42, 0x7A, 0x1C, 0xE8, 0x65, 0x30, 0xBF}
 #endif
 
 /* --- v5.11 ---------------------------------------------------------------------
