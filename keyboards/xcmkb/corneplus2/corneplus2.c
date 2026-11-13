@@ -18,6 +18,35 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "quantum.h"
 
+#if defined(XCMKB_DTR_MODE) && XCMKB_DTR_MODE == 2
+/* Settled double-tap reset (see post_config.h). Replaces the stock __late_init of
+ * platforms/chibios/bootloaders/rp2040.c, which post_config.h has switched off. Stock arms
+ * the bootloader flag the instant the chip comes out of reset, so a USB plug that makes
+ * contact, drops and makes contact again within 200 ms lands in RPI-RP2. Here the first
+ * XCMKB_DTR_SETTLE_MS are unarmed. A manual double-tap of reset still works, the second
+ * tap just has to come 0.3-0.8 s after the first. */
+#    include "hal.h"
+#    include "wait.h"
+#    include "pico/bootrom.h"
+
+static volatile uint32_t __attribute__((section(".ram0.xcmkb_dtr_magic"))) xcmkb_dtr_magic; /* NOLOAD: survives reset */
+#    define XCMKB_DTR_TOKEN 0xCAFEB0BAu
+
+void __late_init(void) {
+    clocks_init(); /* required before reset_usb_boot(), as in the stock code */
+
+    if (xcmkb_dtr_magic == XCMKB_DTR_TOKEN) {
+        xcmkb_dtr_magic = 0;
+        reset_usb_boot(0U, 0U);
+    }
+    xcmkb_dtr_magic = 0;
+    wait_us(XCMKB_DTR_SETTLE_MS * 1000U);
+    xcmkb_dtr_magic = XCMKB_DTR_TOKEN;
+    wait_us(XCMKB_DTR_WINDOW_MS * 1000U);
+    xcmkb_dtr_magic = 0;
+}
+#endif
+
 #ifdef SWAP_HANDS_ENABLE
 __attribute__((weak)) const keypos_t PROGMEM hand_swap_config[MATRIX_ROWS][MATRIX_COLS] = {
     // Left
