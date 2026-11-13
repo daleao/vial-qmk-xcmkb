@@ -51,7 +51,9 @@
 #    endif
 
 	
-/* Bootmagic Lite: hold top-left (left half) or top-right (right half) while plugging in USB */
+/* Bootmagic Lite: these pick the top ROW only. sofleplus2.c overrides bootmagic_should_reset()
+ * with a 3-key chord: the three outer top-row keys (cols 0-2) of the half the USB goes into.
+ * The COLUMN values below are unused since v5.11b. */
 #define BOOTMAGIC_LITE_ROW        0  // left half:  global row 0, col 0
 #define BOOTMAGIC_LITE_COLUMN     0
 #define BOOTMAGIC_LITE_ROW_RIGHT  5  // right half: global row 5, col 0

@@ -6,7 +6,7 @@ v5.11b / v5.11hb (Horizontal) (2026-11-13)
 
 * Fixed: plugging in the USB cable sometimes put the keyboard into firmware-update mode (the RPI-RP2 drive appeared instead of the keyboard). This could happen on either half.
 * Double-tap reset still opens firmware-update mode. Leave about half a second between the two taps; a very fast double tap now just restarts the keyboard.
-* Bootmagic: hold the top-left key (left half) or top-right key (right half) for about a second while plugging in.
+* Bootmagic now uses three keys, so a key resting on the corner can no longer send the keyboard to firmware-update mode. To open firmware-update mode, hold the three outer keys of the top row on the half you plug the cable into, for about a second while plugging in: Esc, 1, 2 on the left half; Backspace, 0, 9 on the right half. These are the three corner keys whatever is mapped to them, so Backspace may be "-" on your layout. Your keymap and settings are not erased.
 * The keyboard takes about half a second longer to appear after plugging in.
 
 v5.11 / v5.11h (Horizontal) (2026-10-11)

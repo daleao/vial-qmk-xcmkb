@@ -1,5 +1,18 @@
 #include "sofleplus2.h"
 
+#ifdef BOOTMAGIC_ENABLE
+/* Bootmagic chord (2026-11-13): hold the three outer keys of the top row of the half the
+ * USB cable goes into: left [0][0] [0][1] [0][2] (Esc/`, 1, 2), right [5][0] [5][1] [5][2]
+ * (Bksp/-, 0, 9). Replaces the stock single corner key so a key resting on the corner
+ * cannot send the board to the bootloader. BOOTMAGIC_LITE_ROW / _ROW_RIGHT (config.h)
+ * pick the row; the keymaps' bootmagic_reset_eeprom() no-op still keeps EEPROM intact. */
+#    define XCMKB_BOOTMAGIC_CHORD 0x07u /* cols 0, 1, 2 */
+bool bootmagic_should_reset(void) {
+    uint8_t row = is_keyboard_left() ? BOOTMAGIC_LITE_ROW : BOOTMAGIC_LITE_ROW_RIGHT;
+    return (matrix_get_row(row) & XCMKB_BOOTMAGIC_CHORD) == XCMKB_BOOTMAGIC_CHORD;
+}
+#endif
+
 #if defined(XCMKB_DTR_MODE) && XCMKB_DTR_MODE == 2
 /* Settled double-tap reset (see post_config.h). Replaces the stock __late_init of
  * platforms/chibios/bootloaders/rp2040.c, which post_config.h has switched off. The first
