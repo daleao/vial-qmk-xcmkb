@@ -336,18 +336,29 @@ void load_sniper_settings(void) {
     digitizer_set_sniper_active(false);
 }
 
+/* On/off flags that default to ON are stored as 0x01 (on) / 0x02 (off), so
+ * both erased states (0xFF, and 0x00 from a wiped wear-leveling store) read as
+ * "unset" and fall back to the default instead of silently turning it off. */
+#define EEPROM_FLAG_ON 0x01
+#define EEPROM_FLAG_OFF 0x02
+
+static bool load_default_on_flag(uintptr_t addr) {
+    uint8_t stored = eeprom_read_byte((uint8_t *)addr);
+    if (stored == EEPROM_FLAG_OFF) return false;
+    if (stored != EEPROM_FLAG_ON) eeprom_write_byte((uint8_t *)addr, EEPROM_FLAG_ON);
+    return true;
+}
+
+static void save_flag(uintptr_t addr, bool on) {
+    eeprom_update_byte((uint8_t *)addr, on ? EEPROM_FLAG_ON : EEPROM_FLAG_OFF);
+}
+
 void save_zoom_setting(void) {
-    eeprom_write_byte((uint8_t *)(EEPROM_ZOOM_TOGGLE_OFFSET), zoom_enabled ? 1 : 0);
+    save_flag(EEPROM_ZOOM_TOGGLE_OFFSET, zoom_enabled);
 }
 
 void load_zoom_setting(void) {
-    uint8_t stored_zoom = eeprom_read_byte((uint8_t *)(EEPROM_ZOOM_TOGGLE_OFFSET));
-    if (stored_zoom == 0xFF) {
-        zoom_enabled = true;
-        save_zoom_setting();
-    } else {
-        zoom_enabled = (stored_zoom != 0);
-    }
+    zoom_enabled = load_default_on_flag(EEPROM_ZOOM_TOGGLE_OFFSET);
 }
 
 static void save_taps_as_clicks(void) {
@@ -364,34 +375,21 @@ static void load_taps_as_clicks(void) {
     }
 }
 
-static void save_trackpad_enabled(void) {
-    eeprom_write_byte((uint8_t *)(EEPROM_TRACKPAD_ENABLED_OFFSET), trackpad_enabled ? 0x01 : 0x02);
+__attribute__((unused)) static void save_trackpad_enabled(void) {
+    save_flag(EEPROM_TRACKPAD_ENABLED_OFFSET, trackpad_enabled);
 }
 
 static void load_trackpad_enabled(void) {
-    uint8_t stored = eeprom_read_byte((uint8_t *)(EEPROM_TRACKPAD_ENABLED_OFFSET));
-    if (stored == 0x02) {
-        trackpad_enabled = false;
-    } else {
-        // 0x01 = explicitly on; 0xFF/0x00/other = unset (default on)
-        trackpad_enabled = true;
-        if (stored != 0x01) save_trackpad_enabled(); // migrate to new encoding
-    }
+    trackpad_enabled = load_default_on_flag(EEPROM_TRACKPAD_ENABLED_OFFSET);
 }
 
 void os_detection_settings_init(void) {
-    uint8_t stored_state = eeprom_read_byte((uint8_t *)EEPROM_OS_DETECTION_OFFSET);
-    if (stored_state == 0xFF) {
-        os_detection_enabled = true;
-        eeprom_write_byte((uint8_t *)EEPROM_OS_DETECTION_OFFSET, 1);
-    } else {
-        os_detection_enabled = (stored_state != 0);
-    }
+    os_detection_enabled = load_default_on_flag(EEPROM_OS_DETECTION_OFFSET);
 }
 
 void toggle_os_detection(void) {
     os_detection_enabled = !os_detection_enabled;
-    eeprom_write_byte((uint8_t *)EEPROM_OS_DETECTION_OFFSET, os_detection_enabled ? 1 : 0);
+    save_flag(EEPROM_OS_DETECTION_OFFSET, os_detection_enabled);
 }
 
 // ==================== Trackpad Layer Config ====================
