@@ -1,10 +1,7 @@
 
 ############ CAPS WORD ############
 # read more here https://docs.qmk.fm/features/caps_word, but it may relates to COMMAND_ENABLE = no, already disabled by default so no conflict here.
-AUTOCORRECT_ENABLE = yes
 CAPS_WORD_ENABLE = yes
-TRI_LAYER_ENABLE = yes
-LEADER_ENABLE = yes
 
 ########### VIA VIAL ###########
 VIA_ENABLE = yes
@@ -61,5 +58,4 @@ UNICODE_COMMON = yes
 
 ########### SQUEEZING AVR ###########
 SPACE_CADET_ENABLE = no
-GRAVE_ESC_ENABLE = no 
-MAGIC_ENABLE = no
+GRAVE_ESC_ENABLE = no

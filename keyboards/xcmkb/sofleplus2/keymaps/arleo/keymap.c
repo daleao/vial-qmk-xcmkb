@@ -2921,20 +2921,6 @@ LAYOUT(
 
 #endif // CHORDAL_HOLD
 
-// ==================== Squeezing AVR ====================
-
-#ifndef MAGIC_ENABLE
-uint16_t keycode_config(uint16_t keycode) {
-    return keycode;
-}
-#endif
-
-#ifndef MAGIC_ENABLE
-uint8_t mod_config(uint8_t mod) {
-    return mod;
-}
-#endif
-
 // ==================== Bootmagic: bootloader WITHOUT erasing ====================
 /* v5.11: hold the top outer key -- top-left on the left half, top-right on the right
  * -- while plugging the USB cable into that half, and the board jumps straight to the
