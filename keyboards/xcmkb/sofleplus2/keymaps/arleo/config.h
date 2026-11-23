@@ -235,6 +235,12 @@
 
 /* Custom Tweaks */
 
+// Vial's dynamic keymap + macro area ends here; keymap.c keeps its settings
+// block at USER_EEPROM_BASE (0x7000), above it. The board config lets the
+// macro buffer run to the end of the 32 KB emulated EEPROM, over that block.
+#undef DYNAMIC_KEYMAP_EEPROM_MAX_ADDR
+#define DYNAMIC_KEYMAP_EEPROM_MAX_ADDR 0x6FFF
+
 // Unfortunately, some applications drop or misorder fast key events. This is a
 // partial fix to slow down the rate at which macros are sent.
 #undef TAP_CODE_DELAY

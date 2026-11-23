@@ -264,54 +264,45 @@ os_variant_t get_effective_os_detection(void) {
 
 // ==================== EEPROM ====================
 
-// EEPROM Address Map (within 4KB RP2040 limit)
-// eeconfig_user (32-bit): cursor_speed[0:15], scroll_dir_v[16], scroll_dir_h[17], scroll_speed[18:23]
-// 0x0FA0-0x0FA7: trackpad layer config
-// 0x0FB0: sniper_modifier_mask
-// 0x0FB1: sniper_scale_level
-// 0x0FB2: zoom toggle
-// 0x0FB3: os_detection_enabled
-// 0x0FB4: taps_as_clicks (0=off, 1=on; 0xFF=unset->default off)
-// 0x0FB5: trackpad_enabled (0=off, 1=on; 0xFF=unset->default on)
-// 0x0FB8-0x0FBB: shared OLED+RGB sleep timeout, uint32 ms  (moved 2026-09-02, see below)
-// 0x0FC0-0x0FC1: VialRGB colors magic (0x5243 = 'RC')
-// 0x0FC2-0x1099: g_direct_mode_colors (RGB_MATRIX_LED_COUNT * sizeof(HSV) = 72*3 = 216 bytes)
-// 0x1070-0x1071: Indicator config magic (0x494Du = 'IM')
-// 0x1072-0x10DF: indicator_config_t (110 bytes: role_masks[10]*8 + colors[10][3])
-// 0x10E0-0x10E1: OLED config magic (0x4F4Cu = 'OL')
-// 0x10E2-0x1123: oled_config_t (66 bytes)
-//
-// FIXED 2026-09-02 -- the sleep timeout lived at 0x10DC and would not survive a
-// replug. 0x10DC was documented as a "reserved gap" on the basis that
-// indicator_config_t ended at 0x10DB, but 0x1072 + 110 = 0x10E0, so the struct
-// actually ends at 0x10DF and the timeout occupied its last four bytes. Every
-// indicator save wrote colors[8][2]/colors[9][*] over it; the value read back at
-// boot then failed the MIN/MAX range check and fell back to the 1-minute
-// default. Moved to 0x0FB8, in the genuinely free 0x0FB6-0x0FBF gap.
-//
-// (v5.11) An older note here claimed the per-key colour block overlapped the
-// indicator block. It assumed 72 LEDs; this board has 58, so the colours end
-// exactly at 0x1070 and nothing overlaps (asserted below).
-#define EEPROM_SNIPER_SETTINGS_OFFSET 0x0FB0
-#define EEPROM_ZOOM_TOGGLE_OFFSET 0x0FB2
-#define EEPROM_OS_DETECTION_OFFSET 0x0FB3
-#define EEPROM_TAPS_AS_CLICKS_OFFSET 0x0FB4
-#define EEPROM_TRACKPAD_ENABLED_OFFSET 0x0FB5
-#define EEPROM_VIALRGB_COLORS_MAGIC_OFFSET 0x0FC0u
-#define EEPROM_VIALRGB_COLORS_DATA_OFFSET 0x0FC2u
+// EEPROM Address Map. Every keymap setting lives in one block at
+// USER_EEPROM_BASE, above Vial's dynamic keymap and macro area, which config.h
+// caps with DYNAMIC_KEYMAP_EEPROM_MAX_ADDR. (The vendor block sat at
+// 0x0FA0-0x17FF, inside the macro buffer that runs to the end of the 32 KB
+// emulated EEPROM, so long macros overwrote it and a new build's macro reset
+// zeroed it.) Offsets are from USER_EEPROM_BASE:
+// eeconfig_user (32-bit, not in this block): cursor_speed[0:15], scroll_dir_v[16], scroll_dir_h[17], scroll_speed[18:23]
+// +0x000-0x007: trackpad layer config (magic + 3 masks)
+// +0x010: sniper_modifier_mask   +0x011: sniper_scale_level
+// +0x012: zoom toggle            +0x013: os_detection_enabled   (0x01 on, 0x02 off, else unset)
+// +0x014: taps_as_clicks         +0x015: trackpad_enabled       (0x01 on, 0x02 off, else unset)
+// +0x018-0x01B: shared OLED+RGB sleep timeout, uint32 ms
+// +0x020-0x021: VialRGB colours magic ('RC'), +0x022: g_direct_mode_colors (58 LEDs * 3 = 174 bytes)
+// +0x0D0-0x0D1: indicator config magic ('IM'), +0x0D2: indicator_config_t (110 bytes)
+// +0x140-0x141: OLED config magic ('OL'),      +0x142: oled_config_t (66 bytes)
+// +0x190-0x191: per-LED indicator colour magic ('IC'), +0x192: colours
+// Overlaps and the end of the EEPROM are checked by the _Static_asserts below.
+#define USER_EEPROM_BASE 0x7000u
+_Static_assert(USER_EEPROM_BASE > DYNAMIC_KEYMAP_EEPROM_MAX_ADDR, "keymap EEPROM block overlaps Vial's dynamic keymap/macro area");
+#define EEPROM_SNIPER_SETTINGS_OFFSET (USER_EEPROM_BASE + 0x010)
+#define EEPROM_ZOOM_TOGGLE_OFFSET (USER_EEPROM_BASE + 0x012)
+#define EEPROM_OS_DETECTION_OFFSET (USER_EEPROM_BASE + 0x013)
+#define EEPROM_TAPS_AS_CLICKS_OFFSET (USER_EEPROM_BASE + 0x014)
+#define EEPROM_TRACKPAD_ENABLED_OFFSET (USER_EEPROM_BASE + 0x015)
+#define EEPROM_VIALRGB_COLORS_MAGIC_OFFSET (USER_EEPROM_BASE + 0x020u)
+#define EEPROM_VIALRGB_COLORS_DATA_OFFSET (USER_EEPROM_BASE + 0x022u)
 #define VIALRGB_COLORS_EEPROM_MAGIC 0x5243u /* 'R','C' — RGB Customise */
-#define EEPROM_INDICATOR_MAGIC_OFFSET 0x1070u
-#define EEPROM_INDICATOR_DATA_OFFSET 0x1072u
+#define EEPROM_INDICATOR_MAGIC_OFFSET (USER_EEPROM_BASE + 0x0D0u)
+#define EEPROM_INDICATOR_DATA_OFFSET (USER_EEPROM_BASE + 0x0D2u)
 #define INDICATOR_EEPROM_MAGIC 0x494Du /* 'I','M' — Indicator bitmask v5 */
-#define EEPROM_OLED_MAGIC_OFFSET 0x10E0u
+#define EEPROM_OLED_MAGIC_OFFSET (USER_EEPROM_BASE + 0x140u)
 /* (v5.11) per-LED indicator colours: magic 'IC', then [role][led][r,g,b], then
  * (72-LED boards) the LED 64..71 membership bytes. Placed after the OLED block. */
-#define EEPROM_INDICATOR_LED_MAGIC_OFFSET 0x1130u
-#define EEPROM_INDICATOR_LED_DATA_OFFSET 0x1132u
+#define EEPROM_INDICATOR_LED_MAGIC_OFFSET (USER_EEPROM_BASE + 0x190u)
+#define EEPROM_INDICATOR_LED_DATA_OFFSET (USER_EEPROM_BASE + 0x192u)
 #define INDICATOR_LED_EEPROM_MAGIC 0x4943u /* 'I','C' */
-#define EEPROM_OLED_DATA_OFFSET 0x10E2u
+#define EEPROM_OLED_DATA_OFFSET (USER_EEPROM_BASE + 0x142u)
 #define OLED_EEPROM_MAGIC 0x4F4Cu           /* 'O','L' — OLED labels */
-#define EEPROM_SLEEP_TIMEOUT_OFFSET 0x0FB8u /* uint32 shared sleep timeout (ms); was 0x10DC, which sat inside indicator_config_t */
+#define EEPROM_SLEEP_TIMEOUT_OFFSET (USER_EEPROM_BASE + 0x018u) /* uint32 shared sleep timeout (ms) */
 
 static void save_user_settings(void) {
     uint8_t cursor_level = digitizer_get_mouse_scale();
@@ -405,7 +396,7 @@ void toggle_os_detection(void) {
 
 // ==================== Trackpad Layer Config ====================
 
-#define EECONFIG_USER_TRACKPAD_OFFSET 0x0FA0
+#define EECONFIG_USER_TRACKPAD_OFFSET (USER_EEPROM_BASE + 0x000)
 #define TRACKPAD_CONFIG_MAGIC 0x7401
 
 typedef struct {
