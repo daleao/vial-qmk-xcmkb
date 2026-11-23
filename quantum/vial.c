@@ -613,7 +613,9 @@ uint16_t get_tapping_term(uint16_t keycode, keyrecord_t *record) {
     return TAPPING_TERM;
 #endif
 }
+#endif
 
+#ifdef VIAL_TAP_DANCE_ENABLE
 uint16_t tap_dance_count(void) {
     return VIAL_TAP_DANCE_ENTRIES;
 }
