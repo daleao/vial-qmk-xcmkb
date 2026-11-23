@@ -2018,10 +2018,10 @@ void digitizer_pre_send_user(report_mouse_t *report) {
         // ROTATION_270: report->x = horizontal; negate because RIGHT→negative x
         swipe2_accum -= (int)report->x;
         if (swipe2_accum >= DIGITIZER_SWIPE2_THRESHOLD) {
-            tap_code16(LGUI(KC_RBRC)); // Cmd+] = forward
+            tap_code16(KC_WWW_FORWARD); // browser forward
             swipe2_accum = 0;
         } else if (swipe2_accum <= -DIGITIZER_SWIPE2_THRESHOLD) {
-            tap_code16(LGUI(KC_LBRC)); // Cmd+[ = back
+            tap_code16(KC_WWW_BACK); // browser back
             swipe2_accum = 0;
         }
         report->x = 0;

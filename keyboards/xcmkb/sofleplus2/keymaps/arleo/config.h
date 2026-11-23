@@ -115,13 +115,19 @@
 #define AZOTEQ_IQS5XX_SWIPE_X_ENABLE false
 #define AZOTEQ_IQS5XX_SWIPE_Y_ENABLE false
 
-/* macOS-friendly 3-finger swipe keycodes (mouse fallback mode only, Windows PTP unaffected) */
+/* 3-finger swipes and pinch zoom (mouse fallback mode only, PTP unaffected).
+ * arleo: the vendor shipped macOS shortcuts (Ctrl+arrows for Mission Control and
+ * desktops, Cmd+= / Cmd+- for zoom). These are desktop-neutral on Linux:
+ * left/right = mouse back/forward, up = Super (overview in KDE and GNOME),
+ * down = Esc, zoom = Ctrl+= / Ctrl+-. */
 /* ROTATION_270: physical RIGHT → decreasing digitizer x → invert x for correct native swipe direction */
 #define DIGITIZER_SWIPE_X_INVERT 1
-#define DIGITIZER_SWIPE_UP_KC    LCTL(KC_UP)     // macOS Mission Control
-#define DIGITIZER_SWIPE_DOWN_KC  LCTL(KC_DOWN)   // macOS App Exposé
-#define DIGITIZER_SWIPE_LEFT_KC  LCTL(KC_LEFT)   // macOS Previous Desktop
-#define DIGITIZER_SWIPE_RIGHT_KC LCTL(KC_RIGHT)  // macOS Next Desktop
+#define DIGITIZER_SWIPE_UP_KC    KC_LGUI
+#define DIGITIZER_SWIPE_DOWN_KC  KC_ESC
+#define DIGITIZER_SWIPE_LEFT_KC  MS_BTN4
+#define DIGITIZER_SWIPE_RIGHT_KC MS_BTN5
+#define DIGITIZER_HW_ZOOM_IN_KC  LCTL(KC_EQUAL)
+#define DIGITIZER_HW_ZOOM_OUT_KC LCTL(KC_MINUS)
 
 /* Mouse fallback tuning for macOS */
 #define DIGITIZER_SCROLL_INVERT true            // Natural scrolling for macOS
