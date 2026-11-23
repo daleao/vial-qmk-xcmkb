@@ -19,6 +19,8 @@
 #include QMK_KEYBOARD_H
 #include <math.h>
 #include "via.h"
+#include "vial.h"
+#include "dynamic_keymap.h"
 #include "timer.h"
 #include "rgb_matrix.h"
 #include "eeconfig.h"
@@ -1403,27 +1405,6 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][2] = {
 #endif
 // clang-format on
 
-// ==================== Combos ====================
-// Combos are prepopulated into Vial's dynamic combo array in keyboard_post_init_user().
-// This allows both compile-time combos and runtime Vial configuration to coexist.
-
-// Forward declaration for combo initialization
-static void init_user_combos(void);
-
-// ==================== Key Overrides ====================
-
-#ifdef KEY_OVERRIDE_ENABLE
-const key_override_t dot_key_override      = ko_make_basic(MOD_MASK_SHIFT, KC_DOT, KC_QUES);  // Shift + . is ?
-const key_override_t comm_key_override     = ko_make_basic(MOD_MASK_SHIFT, KC_COMM, KC_EXLM); // Shift + , is !
-const key_override_t slsh_key_override     = ko_make_basic(MOD_MASK_SHIFT, KC_SLSH, KC_BSLS); // Shift + / is B-Slash
-const key_override_t mply_key_override_nxt = ko_make_basic(MOD_MASK_CTRL, KC_MPLY, KC_MNXT);  // Ctrl + Play is Next
-const key_override_t mply_key_override_prv = ko_make_basic(MOD_MASK_SHIFT, KC_MPLY, KC_MPRV); // Shift + Play is Prev
-
-const key_override_t *key_overrides[] = {
-    &dot_key_override, &comm_key_override, &slsh_key_override, &mply_key_override_nxt, &mply_key_override_prv,
-};
-#endif // KEY_OVERRIDE_ENABLE
-
 // ==================== Tap-Hold Overrides ====================
 // Per-key tapping term and flow tap term, derived from the config.h constants
 // TAPPING_TERM and FLOW_TAP_TERM. Offsets are proportional to the base value,
@@ -1697,59 +1678,68 @@ static void magic_send_string_P(const char *str, uint16_t repeat_keycode) {
     }
 }
 
-// ==================== Combo Initialization ====================
-// Prepopulate Vial's combo array with compile-time combos.
-// Called after vial_init() in keyboard_post_init_user().
+// ==================== Combos and Key Overrides ====================
+// Vial serves combos and key overrides only from its EEPROM slots, so the
+// definitions below are written into those slots at boot. Only slots that
+// differ are written, and every slot past the definitions is cleared, so a
+// stray Vial GUI edit (or a stale slot from an older build) is undone on the
+// next boot. vial_init() then reloads Vial's RAM copies from the slots.
 
 #ifdef VIAL_COMBO_ENABLE
-#    include "vial.h"
-
-// Combo key sequences stored in PROGMEM
-static const uint16_t combo_caps_keys[] PROGMEM    = {KC_J, KC_COMM, COMBO_END};
-static const uint16_t combo_fn_keys[] PROGMEM      = {KC_F, HRM_N, COMBO_END};
-static const uint16_t combo_commdot_keys[] PROGMEM = {KC_COMM, KC_DOT, COMBO_END};
-
-// Combo definitions: {keys_progmem_ptr, output_keycode}
-static const struct {
-    const uint16_t *keys;
-    uint16_t        output;
-} user_combos[] = {
-    {combo_caps_keys, CW_TOGG},    // J + , => Caps Word
-    {combo_fn_keys, OSL(FUNC)},    // F + N => FUNC layer
-    {combo_commdot_keys, KC_SCLN}, // , + . => semicolon
+static const vial_combo_entry_t user_combos[] = {
+    {.input = {KC_J, KC_COMM}, .output = CW_TOGG},   // J + , => Caps Word
+    {.input = {KC_F, HRM_N}, .output = OSL(FUNC)},   // F + N => FUNC layer
+    {.input = {KC_COMM, KC_DOT}, .output = KC_SCLN}, // , + . => semicolon
 };
-#    define USER_COMBO_COUNT (sizeof(user_combos) / sizeof(user_combos[0]))
-
-// Access Vial's combo arrays (declared in vial.c)
-extern combo_t  key_combos[];
-extern uint16_t key_combos_keys[][5];
-
-static void init_user_combos(void) {
-    // Prepopulate Vial's combo array with user-defined combos.
-    // This runs after vial_init() which initializes the arrays.
-    for (size_t i = 0; i < USER_COMBO_COUNT && i < VIAL_COMBO_ENTRIES; ++i) {
-        // Copy keys from PROGMEM to Vial's RAM array
-        for (size_t j = 0; j < 4; ++j) {
-            uint16_t k            = pgm_read_word(&user_combos[i].keys[j]);
-            key_combos_keys[i][j] = k;
-            if (k == COMBO_END) break;
-        }
-        key_combos_keys[i][4] = COMBO_END; // Ensure termination
-
-        // Set up the combo_t entry
-        key_combos[i].keys    = key_combos_keys[i];
-        key_combos[i].keycode = user_combos[i].output;
-    }
-}
-#else
-static void init_user_combos(void) {}
+_Static_assert(ARRAY_SIZE(user_combos) <= VIAL_COMBO_ENTRIES, "more combos than Vial combo slots");
 #endif
+
+#ifdef VIAL_KEY_OVERRIDE_ENABLE
+// Same semantics as ko_make_basic(): all layers, no negative mods, trigger mods
+// suppressed, default activation options.
+#    define USER_KO(mods, trigger_kc, replacement_kc) \
+        {.trigger = (trigger_kc), .replacement = (replacement_kc), .layers = 0xFFFF, .trigger_mods = (mods), .negative_mod_mask = 0, .suppressed_mods = (mods), .options = vial_ko_enabled | vial_ko_option_activation_trigger_down | vial_ko_option_activation_required_mod_down | vial_ko_option_activation_negative_mod_up}
+
+static const vial_key_override_entry_t user_key_overrides[] = {
+    USER_KO(MOD_MASK_SHIFT, KC_DOT, KC_QUES),  // Shift + . is ?
+    USER_KO(MOD_MASK_SHIFT, KC_COMM, KC_EXLM), // Shift + , is !
+    USER_KO(MOD_MASK_SHIFT, KC_SLSH, KC_BSLS), // Shift + / is B-Slash
+    USER_KO(MOD_MASK_CTRL, KC_MPLY, KC_MNXT),  // Ctrl + Play is Next
+    USER_KO(MOD_MASK_SHIFT, KC_MPLY, KC_MPRV), // Shift + Play is Prev
+};
+_Static_assert(ARRAY_SIZE(user_key_overrides) <= VIAL_KEY_OVERRIDE_ENTRIES, "more key overrides than Vial key override slots");
+#endif
+
+static void sync_vial_slots(void) {
+#ifdef VIAL_COMBO_ENABLE
+    for (uint8_t i = 0; i < VIAL_COMBO_ENTRIES; ++i) {
+        vial_combo_entry_t want = {0}, have;
+        if (i < ARRAY_SIZE(user_combos)) want = user_combos[i];
+        if (dynamic_keymap_get_combo(i, &have) != 0 || memcmp(&want, &have, sizeof(want)) != 0) {
+            dynamic_keymap_set_combo(i, &want);
+        }
+    }
+#endif
+#ifdef VIAL_KEY_OVERRIDE_ENABLE
+    for (uint8_t i = 0; i < VIAL_KEY_OVERRIDE_ENTRIES; ++i) {
+        vial_key_override_entry_t want = {0}, have;
+        if (i < ARRAY_SIZE(user_key_overrides)) want = user_key_overrides[i];
+        if (dynamic_keymap_get_key_override(i, &have) != 0 || memcmp(&want, &have, sizeof(want)) != 0) {
+            dynamic_keymap_set_key_override(i, &want);
+        }
+    }
+#endif
+    // Reload Vial's RAM tables from the slots. Also needed when nothing was
+    // written: vial_init() first ran in keyboard_setup(), before via_init()
+    // could reset the EEPROM for a new build.
+    vial_init();
+}
 
 // ==================== Keyboard Init ====================
 
 void keyboard_post_init_user(void) {
-    // Initialize user-defined combos into Vial's combo array
-    init_user_combos();
+    // Write the combo and key override definitions into Vial's slots
+    sync_vial_slots();
 
     gpio_set_pin_input_high(GP12);
 
