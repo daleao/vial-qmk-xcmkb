@@ -129,8 +129,8 @@
 #define DIGITIZER_HW_ZOOM_IN_KC  LCTL(KC_EQUAL)
 #define DIGITIZER_HW_ZOOM_OUT_KC LCTL(KC_MINUS)
 
-/* Mouse fallback tuning for macOS */
-#define DIGITIZER_SCROLL_INVERT true            // Natural scrolling for macOS
+/* Mouse fallback tuning */
+#define DIGITIZER_SCROLL_INVERT true            // Natural (reversed) scrolling; vendor default, kept
 
 
 /* KVM OS detection - Linux-optimized extended timeouts */

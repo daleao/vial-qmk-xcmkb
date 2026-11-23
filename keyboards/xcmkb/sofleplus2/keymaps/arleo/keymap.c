@@ -386,7 +386,7 @@ typedef struct {
 
 /* arleo: no layer gets 1-finger scroll/swipe by default. The vendor default
  * (scroll on layer 1, swipe on 2 and 3) landed on STRDY, SYMB and NUMB here.
- * Only used in mouse-fallback mode; runtime changes persist at 0x0FA0. */
+ * Only used in mouse-fallback mode; runtime changes persist at USER_EEPROM_BASE. */
 static trackpad_layer_config_t user_config = {
     .scroll_layers = 0,
     .swipe2_layers = 0,
@@ -1905,7 +1905,7 @@ report_mouse_t pointing_device_task_user(report_mouse_t mouse_report) {
 // PTP mode (Windows): this function is never called (digitizer_send_mouse_reports=false).
 //
 // scroll_layer:  1-finger movement → 2-finger-style scroll (x→h, y→v)
-// swipe2_layer:  1-finger horizontal movement → browser back/forward (Cmd+[/])
+// swipe2_layer:  1-finger horizontal movement → browser back/forward (WWW Back/Forward keys)
 // swipe3_layer:  1-finger movement → 3-finger swipe keycodes (desktop switch, etc.)
 //
 // ROTATION_270 axis mapping (flip_x=true, switch_xy=true):

@@ -38,7 +38,7 @@ CONSOLE_ENABLE = no
 
 ########### OS DETECTION ###########
 # OS_DETECTION_ENABLE stays ON -- the keymap depends on it: get_effective_os_detection(),
-# the OS_DETECTION_TOGGLE keycode and the EEPROM-persisted toggle at 0x0FB3.
+# the OS_DETECTION_TOGGLE keycode and the EEPROM-persisted toggle (USER_EEPROM_BASE + 0x013).
 # It is OS_DETECTION_KEYBOARD_RESET (config.h) that is disabled, and that is the
 # one that caused the Windows reboots and Linux enumeration failures.
 OS_DETECTION_ENABLE = yes
@@ -56,6 +56,6 @@ UNICODEMAP_ENABLE = no
 UCIS_ENABLE = no
 UNICODE_COMMON = yes
 
-########### SQUEEZING AVR ###########
+########### UNUSED FEATURES ###########
 SPACE_CADET_ENABLE = no
 GRAVE_ESC_ENABLE = no
