@@ -209,6 +209,13 @@
 /* Vial UID for this specific keymap (unique — was still 506's UID after copy) */
 #ifdef VIAL_ENABLE
 #define VIAL_KEYBOARD_UID {0x6B, 0xE4, 0x29, 0xC7, 0x5D, 0x18, 0xA3, 0xF0}
+
+/* arleo: Vial is locked (no VIAL_INSECURE in rules.mk). The GUI is view-only
+ * here; unlocking is only needed for the matrix tester, macro edits or the
+ * bootloader-jump command. Unlock combo: hold the two outermost top-row keys,
+ * matrix (0,0) on the left half and (5,0) on the right (` and = on QWERT). */
+#define VIAL_UNLOCK_COMBO_ROWS { 0, 5 }
+#define VIAL_UNLOCK_COMBO_COLS { 0, 0 }
 #endif
 
 /* --- v5.11 ---------------------------------------------------------------------
