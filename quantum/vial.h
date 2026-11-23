@@ -225,7 +225,19 @@ enum {
     vial_arep_enabled = (1 << 3),
 };
 
+/* User override callback for alt repeat key.
+ * Implement this in your keymap to provide custom alt repeat behavior.
+ * Return KC_TRNS to fall back to Vial's dynamic alt repeat key table. */
+uint16_t get_alt_repeat_key_keycode_user_override(uint16_t keycode, uint8_t mods);
+
 #else
 #undef VIAL_ALT_REPEAT_KEY_ENTRIES
 #define VIAL_ALT_REPEAT_KEY_ENTRIES 0
+#endif
+
+/* User override callback for tapping term.
+ * Implement this in your keymap to provide per-key tapping term overrides.
+ * Return 0 to fall back to Vial's dynamic tapping term. */
+#ifdef TAPPING_TERM_PER_KEY
+uint16_t get_tapping_term_user(uint16_t keycode, keyrecord_t *record);
 #endif
