@@ -1292,7 +1292,6 @@ bool dip_switch_update_user(uint8_t index, bool active) {
     keyevent_t event = {.key = kp, .pressed = active, .time = timer_read(), .type = KEY_EVENT};
     vmatrix_note(event.key, event.pressed);
     action_exec(event);
-    }
 
     return true;
 }
