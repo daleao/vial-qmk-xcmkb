@@ -162,7 +162,32 @@ enum custom_keycodes {
     MG_MKGRVS,
 };
 
-// ==================== Keycode Aliases =============};
+// ==================== Keycode Aliases ====================
+
+enum keycode_aliases {
+    // The "magic" key is the Alternate Repeat Key.
+    MAGIC = QK_AREP,
+
+    // Short aliases for home row mods and other tap-hold keys.
+    HRM_S = LALT_T(KC_S),
+    HRM_T = LT(SYMB, KC_T),
+    HRM_R = LSFT_T(KC_R),
+    HRM_D = LT(NAVI, KC_D),
+    HRM_G = LCTL_T(KC_G),
+
+    HRM_N = LT(NUMB, KC_N),
+    HRM_E = RSFT_T(KC_E),
+    HRM_A = LT(SYMB, KC_A),
+    HRM_I = LALT_T(KC_I),
+    HRM_H = RCTL_T(KC_H),
+
+    MO_FUNC = MO(FUNC),
+    MO_MOUS = MO(MOUS),
+    TO_STRDY = TO(STRDY),
+    TO_GAM1 = TO(GAM1),
+    TO_GAM2  = TO(GAM2),
+    TO_BORU  = TO(BORU),
+};
 
 // ==================== Speed/Scroll Constants ====================
 
