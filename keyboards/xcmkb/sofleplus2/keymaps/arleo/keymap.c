@@ -56,8 +56,6 @@ static void vialrgb_direct_sync_handler(uint8_t in_buflen, const void *in_data, 
 #    define setPinInputPullup(pin) gpio_set_pin_input_high(pin)
 #endif
 
-__attribute__((unused)) static void tap_via_key(keypos_t key) {}
-
 #ifdef SUPER_ALT_TAB_ENABLE
 bool     is_alt_tab_active = false;
 uint16_t alt_tab_timer     = 0;
@@ -231,28 +229,11 @@ uint16_t info_timer           = 0;
 
 // Zoom gesture state
 bool        zoom_enabled   = true;
-static bool zoom_active    = false;
-static bool zoom_using_cmd = false;
 
 bool digitizer_zoom_enabled(void) {
     return zoom_enabled;
 }
 
-// Release any modifier keys held by the zoom gesture.
-// Safe to call even when zoom is not active.
-static void zoom_cleanup(void) {
-    if (!zoom_active) return;
-
-    unregister_code(KC_KP_PLUS);
-    unregister_code(KC_KP_MINUS);
-    if (zoom_using_cmd) {
-        unregister_code(KC_LGUI);
-    } else {
-        unregister_code(KC_LCTL);
-    }
-
-    zoom_active = false;
-}
 
 // OS detection toggle
 static bool os_detection_enabled = true;
@@ -705,9 +686,12 @@ void vialrgb_get_trackpad_settings_user(uint8_t *args) {
 }
 
 void vialrgb_set_trackpad_settings_user(const uint8_t *args) {
-    digitizer_set_mouse_scale(args[0]);
-    scroll_speed = args[1];
-    digitizer_set_scroll_scale(args[1]);
+    // Out-of-range speeds are ignored rather than stored (boot rejects them anyway).
+    if (args[0] >= MIN_CURSOR_SPEED && args[0] <= MAX_CURSOR_SPEED) digitizer_set_mouse_scale(args[0]);
+    if (args[1] >= MIN_SCROLL_SPEED && args[1] <= MAX_SCROLL_SPEED) {
+        scroll_speed = args[1];
+        digitizer_set_scroll_scale(args[1]);
+    }
     scroll_dir_v = args[2] ? 1 : 0;
     scroll_dir_h = args[3] ? 1 : 0;
     zoom_enabled = args[4] != 0;
@@ -828,11 +812,6 @@ static void aurora_task(void); /* wake-up animation, defined with the RGB indica
 
 void housekeeping_task_user(void) {
     aurora_task();
-
-    static layer_state_t state = 0;
-    if (layer_state != state) {
-        state = layer_state_set_user(layer_state);
-    }
 
 #if defined(VIALRGB_ENABLE) && !defined(VIALRGB_NO_DIRECT)
     if (is_keyboard_master()) {
@@ -1179,7 +1158,10 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     // indicator doesn't out-shine the (usually sub-ceiling) RGB effects.
     uint8_t brightness = rgb_matrix_get_val() * INDICATOR_BRIGHTNESS_PCT / 100;
     if (brightness == 0) brightness = 1;
-#define SCALE(c) (((c) * brightness / 255) ?: 1)
+/* Scale a channel to the indicator brightness. Channels that are on stay at
+ * least 1 so dim indicators don't vanish; channels that are off stay off (the
+ * old `?: 1` lit every zero channel at 1, tinting pure colours). */
+#define SCALE(c) ((c) == 0 ? 0 : MAX(1, (c) * brightness / 255))
 
     bool set = false;
 
@@ -1898,7 +1880,6 @@ bool digitizer_task_user(digitizer_t *const state) {
 
 report_mouse_t pointing_device_task_user(report_mouse_t mouse_report) {
     if (!trackpad_enabled) {
-        zoom_cleanup();
         mouse_report.x       = 0;
         mouse_report.y       = 0;
         mouse_report.h       = 0;
@@ -2320,7 +2301,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case TRACKPAD_TOGGLE:
             if (record->event.pressed) {
                 trackpad_enabled = !trackpad_enabled;
-                if (!trackpad_enabled) zoom_cleanup();
                 save_trackpad_enabled();
             }
             break;
@@ -2378,7 +2358,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case ZMTOG:
             if (record->event.pressed) {
                 zoom_enabled = !zoom_enabled;
-                if (!zoom_enabled) zoom_cleanup();
                 save_zoom_setting();
             }
             break;
@@ -2529,7 +2508,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 // have lost the key-down event and clear_mods() ensures our internal state
 // matches reality after resume.
 void suspend_wakeup_init_user(void) {
-    zoom_cleanup();
     pinch_cleanup();
     clear_mods();
 }
@@ -2930,10 +2908,11 @@ LAYOUT(
 #endif // CHORDAL_HOLD
 
 // ==================== Bootmagic: bootloader WITHOUT erasing ====================
-/* v5.11: hold the top outer key -- top-left on the left half, top-right on the right
- * -- while plugging the USB cable into that half, and the board jumps straight to the
- * RP2040 UF2 bootloader. Stock Bootmagic also clears EEPROM first (eeconfig_disable());
- * overriding that with a no-op keeps the keymap and every setting.
+/* v5.11b: hold the three outer top-row keys (columns 0-2) of the half the USB cable
+ * goes into while plugging it in, and the board jumps straight to the RP2040 UF2
+ * bootloader (bootmagic_should_reset() in sofleplus2.c). Stock Bootmagic also clears
+ * EEPROM first (eeconfig_disable()); overriding that with a no-op keeps the keymap
+ * and every setting.
  *  - A NEWLY BUILT firmware still resets the Vial keymap on its first boot (Vial's
  *    EEPROM magic is a random BUILD_ID per build); re-flashing the same .uf2 does not.
  *  - To wipe everything on purpose, use the QK_CLEAR_EEPROM (EE_CLR) key: it resets
