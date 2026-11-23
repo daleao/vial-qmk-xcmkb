@@ -240,6 +240,10 @@
 #undef TAP_CODE_DELAY
 #define TAP_CODE_DELAY 5
 
+// The en/em dash macro (send_unicode_string) needs the host's input method.
+// Without this the Unicode mode defaults to macOS.
+#define UNICODE_SELECTED_MODES UNICODE_MODE_LINUX
+
 // Tap-hold configuration for home row mods.
 // QMK_SETTINGS = no (rules.mk), so these are authoritative. build_vial.mk only
 // adds TAPPING_TERM_PER_KEY and CHORDAL_HOLD when QMK Settings or tap dance is
