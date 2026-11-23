@@ -234,14 +234,15 @@
 #define TAP_CODE_DELAY 5
 
 // Tap-hold configuration for home row mods.
-// TAPPING_TERM_PER_KEY and CHORDAL_HOLD are forced by build_vial.mk — no need to redefine.
+// QMK_SETTINGS = no (rules.mk), so these are authoritative. build_vial.mk only
+// adds TAPPING_TERM_PER_KEY and CHORDAL_HOLD when QMK Settings or tap dance is
+// on, so both are defined here. Per-key terms: get_tapping_term_user() and
+// get_flow_tap_term() in keymap.c.
 #define TAPPING_TERM 240
-#undef FLOW_TAP_TERM
+#define TAPPING_TERM_PER_KEY
 #define FLOW_TAP_TERM 100
 #define PERMISSIVE_HOLD
-#define SPECULATIVE_HOLD
-#define SPECULATIVE_HOLD_ONE_KEY
-#define SPECULATIVE_HOLD_FLOW_TERM 200
+#define CHORDAL_HOLD
 //#define RETRO_TAPPING
 
 // Vendor settings

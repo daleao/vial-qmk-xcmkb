@@ -13,9 +13,14 @@ VIAL_INSECURE = yes
 VIAL_ENCODERS_ENABLE = yes
 VIAL_USER_CONFIG_ENABLE = yes
 
-QMK_SETTINGS = yes
+# arleo: keymap.c is the only source of truth. QMK Settings off, so the
+# config.h tap-hold defines are authoritative (no EEPROM copy that a new build
+# resets). Tap dance is unused. Combos and key overrides stay on, and keymap.c
+# writes its own definitions into Vial's slots at boot (vial.h has no switch to
+# keep the feature but drop Vial's dynamic part).
+QMK_SETTINGS = no
 COMBO_ENABLE = yes
-TAP_DANCE_ENABLE = yes
+TAP_DANCE_ENABLE = no
 KEY_OVERRIDE_ENABLE = yes
 
 ########### PLUS ###########

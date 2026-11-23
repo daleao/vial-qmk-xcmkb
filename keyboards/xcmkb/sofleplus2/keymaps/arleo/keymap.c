@@ -1425,31 +1425,31 @@ const key_override_t *key_overrides[] = {
 #endif // KEY_OVERRIDE_ENABLE
 
 // ==================== Tap-Hold Overrides ====================
-// Non-linear scaling for per-key tapping term and flow tap term adjustments.
-// Offsets are proportional to Vial's dynamic base value, with quadratic easing
-// so that lower base values get smaller percentage offsets (tighter control)
-// and higher base values get larger percentage offsets (more relaxed).
-
-#ifdef QMK_SETTINGS
-#    include "qmk_settings.h"
+// Per-key tapping term and flow tap term, derived from the config.h constants
+// TAPPING_TERM and FLOW_TAP_TERM. Offsets are proportional to the base value,
+// with quadratic easing so that lower base values get smaller percentage
+// offsets (tighter control) and higher base values get larger ones (more
+// relaxed). With TAPPING_TERM 240 and FLOW_TAP_TERM 100 this gives:
+//   Shift HRMs 195 ms, pinky Alt HRMs 280 ms, everything else 240 ms;
+//   flow tap 100 ms on the Alt HRMs and 89 ms on the Ctrl HRMs.
 
 // Tapping term scaling parameters
-#    define TT_MIN 120 // Minimum reasonable tapping term (ms)
-#    define TT_MAX 300 // Maximum reasonable tapping term (ms)
+#define TT_MIN 120 // Minimum reasonable tapping term (ms)
+#define TT_MAX 300 // Maximum reasonable tapping term (ms)
 
 // Flow tap term scaling parameters
-#    define FT_MIN 50  // Minimum reasonable flow tap term (ms)
-#    define FT_MAX 200 // Maximum reasonable flow tap term (ms)
+#define FT_MIN 50  // Minimum reasonable flow tap term (ms)
+#define FT_MAX 200 // Maximum reasonable flow tap term (ms)
 
 // Offset percentages for tapping term (non-linear: min% at TT_MIN, max% at TT_MAX)
-#    define TT_SHIFT_OFFSET_MIN_PCT 15 // Shift keys: 15% faster at low TT
-#    define TT_SHIFT_OFFSET_MAX_PCT 25 // Shift keys: 25% faster at high TT
-#    define TT_PINKY_OFFSET_MIN_PCT 12 // Pinky keys: 5% slower at low TT
-#    define TT_PINKY_OFFSET_MAX_PCT 24 // Pinky keys: 12% slower at high TT
+#define TT_SHIFT_OFFSET_MIN_PCT 15 // Shift keys: 15% faster at low TT
+#define TT_SHIFT_OFFSET_MAX_PCT 25 // Shift keys: 25% faster at high TT
+#define TT_PINKY_OFFSET_MIN_PCT 12 // Pinky keys: 12% slower at low TT
+#define TT_PINKY_OFFSET_MAX_PCT 24 // Pinky keys: 24% slower at high TT
 
 // Offset percentages for flow tap term
-#    define FT_CTRL_OFFSET_MIN_PCT 10 // Ctrl keys: 10% faster at low FT
-#    define FT_CTRL_OFFSET_MAX_PCT 20 // Ctrl keys: 20% faster at high FT
+#define FT_CTRL_OFFSET_MIN_PCT 10 // Ctrl keys: 10% faster at low FT
+#define FT_CTRL_OFFSET_MAX_PCT 20 // Ctrl keys: 20% faster at high FT
 
 // Non-linear scaling: calculates offset based on quadratic easing.
 // Returns the offset amount (not the final value).
@@ -1474,70 +1474,40 @@ static inline uint16_t scaled_offset(uint16_t base, uint16_t min_val, uint16_t m
 
     return (base * pct) / 100;
 }
-#endif // QMK_SETTINGS
 
+// Called by get_tapping_term() in quantum/vial.c; 0 means "use TAPPING_TERM".
 uint16_t get_tapping_term_user(uint16_t keycode, keyrecord_t *record) {
-#ifdef QMK_SETTINGS
-    // Use Vial's dynamic tapping term as the base
-    uint16_t base = QS.tapping_term;
-
     switch (keycode) {
         // Shift HRMs (ring fingers): faster tapping term
         case HRM_R: // LSFT_T(KC_R)
         case HRM_E: // RSFT_T(KC_E)
-            return base - scaled_offset(base, TT_MIN, TT_MAX, TT_SHIFT_OFFSET_MIN_PCT, TT_SHIFT_OFFSET_MAX_PCT);
+            return TAPPING_TERM - scaled_offset(TAPPING_TERM, TT_MIN, TT_MAX, TT_SHIFT_OFFSET_MIN_PCT, TT_SHIFT_OFFSET_MAX_PCT);
 
         // Pinky Alt HRMs: slower tapping term (pinkies need more time)
         case HRM_S: // LALT_T(KC_S)
         case HRM_I: // LALT_T(KC_I)
-            return base + scaled_offset(base, TT_MIN, TT_MAX, TT_PINKY_OFFSET_MIN_PCT, TT_PINKY_OFFSET_MAX_PCT);
+            return TAPPING_TERM + scaled_offset(TAPPING_TERM, TT_MIN, TT_MAX, TT_PINKY_OFFSET_MIN_PCT, TT_PINKY_OFFSET_MAX_PCT);
 
         default:
-            return 0; // Fall back to Vial's dynamic tapping term
+            return 0;
     }
-#else
-    // Fallback when QMK_SETTINGS is not enabled: use compile-time constants
-    switch (keycode) {
-        case HRM_R:
-        case HRM_E:
-            return TAPPING_TERM - 45;
-        default:
-            return TAPPING_TERM;
-    }
-#endif
 }
 
 #ifdef FLOW_TAP_TERM
-uint16_t get_flow_tap_term_user(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode) {
+uint16_t get_flow_tap_term(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode) {
     // Only apply Flow Tap when following a letter key and no Ctrl/Gui/Alt mods active
     if (get_tap_keycode(prev_keycode) <= KC_Z && (get_mods() & (MOD_MASK_CG | MOD_BIT_LALT)) == 0) {
-#    ifdef QMK_SETTINGS
-        // Use Vial's dynamic flow tap term as the base
-        uint16_t base = QS.flow_tap_term;
-
         switch (keycode) {
             // Alt (pinky) HRMs: use base flow tap term (no adjustment)
             case HRM_S:
             case HRM_I:
-                return base;
+                return FLOW_TAP_TERM;
 
             // Ctrl (index finger) HRMs: faster flow tap term
             case HRM_G: // LCTL_T(KC_G)
             case HRM_H: // RCTL_T(KC_H)
-                return base - scaled_offset(base, FT_MIN, FT_MAX, FT_CTRL_OFFSET_MIN_PCT, FT_CTRL_OFFSET_MAX_PCT);
+                return FLOW_TAP_TERM - scaled_offset(FLOW_TAP_TERM, FT_MIN, FT_MAX, FT_CTRL_OFFSET_MIN_PCT, FT_CTRL_OFFSET_MAX_PCT);
         }
-#    else
-        // Fallback when QMK_SETTINGS is not enabled
-        switch (keycode) {
-            case HRM_S:
-            case HRM_I:
-                return FLOW_TAP_TERM;
-
-            case HRM_G:
-            case HRM_H:
-                return FLOW_TAP_TERM - 25;
-        }
-#    endif
     }
 
     return 0; // Disable Flow Tap otherwise.
