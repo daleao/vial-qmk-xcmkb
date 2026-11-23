@@ -1,5 +1,4 @@
 #pragma once
-#include "encoder.c"
 
 
 //Debug Manager//
