@@ -218,8 +218,13 @@
 #define SPLIT_TRANSACTION_IDS_USER VIALRGB_DIRECT_SYNC, VIALRGB_INDICATOR_SYNC, OLED_SCREEN_B_SYNC, TP_INFO_SYNC, VIALRGB_INDICATOR_LED_SYNC, AURORA_SYNC
 
 /* Wake-up "Aurora tide" animation on plug-in / PC start-up (keymap.c). Comment
- * out to drop it entirely. */
-#define AURORA_WAKE_ENABLE
+ * out to drop it entirely.
+ *
+ * arleo: disabled. Lumino owns the boot/wake lighting here (LUMINO_BOOT_COLOR
+ * fades in, then hands over to PaletteFx); a second wake animation would fight
+ * it for the LEDs. AURORA_SYNC stays in the transaction list above so the IDs
+ * keep matching the vendor's; it is unused while this is off. */
+// #define AURORA_WAKE_ENABLE
 
 /* Custom Tweaks */
 
