@@ -414,10 +414,13 @@ typedef struct {
     uint16_t swipe3_layers;
 } trackpad_layer_config_t;
 
+/* arleo: no layer gets 1-finger scroll/swipe by default. The vendor default
+ * (scroll on layer 1, swipe on 2 and 3) landed on STRDY, SYMB and NUMB here.
+ * Only used in mouse-fallback mode; runtime changes persist at 0x0FA0. */
 static trackpad_layer_config_t user_config = {
-    .scroll_layers = (1 << 1),
-    .swipe2_layers = (1 << 2),
-    .swipe3_layers = (1 << 3),
+    .scroll_layers = 0,
+    .swipe2_layers = 0,
+    .swipe3_layers = 0,
 };
 
 void trackpad_config_save(void) {
