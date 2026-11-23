@@ -375,7 +375,7 @@ static void load_taps_as_clicks(void) {
     }
 }
 
-__attribute__((unused)) static void save_trackpad_enabled(void) {
+static void save_trackpad_enabled(void) {
     save_flag(EEPROM_TRACKPAD_ENABLED_OFFSET, trackpad_enabled);
 }
 
@@ -1880,6 +1880,22 @@ void matrix_scan_user(void) {
 
 // ==================== Pointing Device Task ====================
 
+/* TRACKPAD_TOGGLE off: drop every contact and button before the digitizer
+ * report is built. pointing_device_task_user() below only blanks the
+ * mouse-fallback report; this also covers Precision Touchpad (PTP) hosts.
+ * Fingers that were down are released cleanly, because the core compares
+ * against the previous state. */
+bool digitizer_task_user(digitizer_t *const state) {
+    if (trackpad_enabled) return false;
+    for (int i = 0; i < DIGITIZER_CONTACT_COUNT; i++) {
+        state->contacts[i].tip        = 0;
+        state->contacts[i].in_range   = 0;
+        state->contacts[i].confidence = 0;
+    }
+    state->buttons = 0;
+    return true;
+}
+
 report_mouse_t pointing_device_task_user(report_mouse_t mouse_report) {
     if (!trackpad_enabled) {
         zoom_cleanup();
@@ -2305,6 +2321,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (record->event.pressed) {
                 trackpad_enabled = !trackpad_enabled;
                 if (!trackpad_enabled) zoom_cleanup();
+                save_trackpad_enabled();
             }
             break;
 
