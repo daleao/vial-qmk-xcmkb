@@ -19,6 +19,8 @@
 #include QMK_KEYBOARD_H
 #include <math.h>
 #include "via.h"
+#include "vial.h"
+#include "dynamic_keymap.h"
 #include "timer.h"
 #include "rgb_matrix.h"
 #include "eeconfig.h"
@@ -28,6 +30,7 @@
 
 #if defined(VIALRGB_ENABLE) && !defined(VIALRGB_NO_DIRECT)
 #    include "transactions.h"
+#    include "vialrgb.h" /* indicator per-LED protocol constants, hook prototypes */
 
 /* Number of LEDs on the LEFT half (keyboard.json split_count[0]).
  * LED indices 0..(SPLIT_LEFT-1) are left side; SPLIT_LEFT..(total-1) are right side.
@@ -52,8 +55,6 @@ static void vialrgb_direct_sync_handler(uint8_t in_buflen, const void *in_data, 
 #ifndef setPinInputPullup
 #    define setPinInputPullup(pin) gpio_set_pin_input_high(pin)
 #endif
-
-__attribute__((unused)) static void tap_via_key(keypos_t key) {}
 
 #ifdef SUPER_ALT_TAB_ENABLE
 bool     is_alt_tab_active = false;
@@ -84,6 +85,13 @@ enum custom_keycodes {
     CK_ATMWU,
     CK_ATMWD,
     CK_PO,
+    /* Kept in the Vial "Custom" keycode list — keep these three first so their
+       QK_KB indices stay aligned with vial.json customKeycodes (positional map). */
+    OS_DETECTION_TOGGLE,
+    AP_GLOB,
+    TP_INFO,
+    /* Below: still handled in process_record_user, but hidden from the Vial GUI
+       (these settings live in the Trackpad tab). Not listed in vial.json. */
     SCROLL_DIR_V,
     SCROLL_DIR_H,
     CURSOR_SPEED_UP,
@@ -103,16 +111,16 @@ enum custom_keycodes {
     SNIPER_DPI_UP,
     SNIPER_DPI_DOWN,
     SNIPER_SHOW_MODS,
-    OS_DETECTION_TOGGLE,
     ZMTOG,
-    AP_GLOB,
-    TP_INFO,
 #else
     CK_ATABF = SAFE_RANGE,
     CK_ATABR,
     CK_ATMWU,
     CK_ATMWD,
     CK_PO,
+    OS_DETECTION_TOGGLE,
+    AP_GLOB,
+    TP_INFO,
     SCROLL_DIR_V,
     SCROLL_DIR_H,
     CURSOR_SPEED_UP,
@@ -132,10 +140,7 @@ enum custom_keycodes {
     SNIPER_DPI_UP,
     SNIPER_DPI_DOWN,
     SNIPER_SHOW_MODS,
-    OS_DETECTION_TOGGLE,
     ZMTOG,
-    AP_GLOB,
-    TP_INFO,
 #endif // VIA_ENABLE
 
     // Macros invoked through the Magic key.
@@ -197,10 +202,18 @@ enum keycode_aliases {
 
 // ==================== State Variables ====================
 
-static bool trackpad_enabled = true;
+static bool    trackpad_enabled = true;
 static int16_t scroll_speed     = DEFAULT_SCROLL_SPEED;
-static int16_t     scroll_dir_v     = 0;
-static int16_t     scroll_dir_h     = 0;
+static int16_t scroll_dir_v     = 0;
+static int16_t scroll_dir_h     = 0;
+
+/* v5.06: shared OLED + RGB sleep timeout (ms), runtime-settable from Vial and
+ * persisted to EEPROM. Drives OLED sleep here and RGB sleep via the core
+ * g_rgb_matrix_timeout (kept in sync by apply_sleep_timeout()). */
+uint32_t    g_sleep_timeout = DEFAULT_SLEEP_TIMEOUT_MS;
+static void apply_sleep_timeout(void) {
+    g_rgb_matrix_timeout = g_sleep_timeout;
+}
 
 // Sniper mode state
 #define LEARNING_TIMEOUT 5000
@@ -216,28 +229,11 @@ uint16_t info_timer           = 0;
 
 // Zoom gesture state
 bool        zoom_enabled   = true;
-static bool zoom_active    = false;
-static bool zoom_using_cmd = false;
 
 bool digitizer_zoom_enabled(void) {
     return zoom_enabled;
 }
 
-// Release any modifier keys held by the zoom gesture.
-// Safe to call even when zoom is not active.
-static void zoom_cleanup(void) {
-    if (!zoom_active) return;
-
-    unregister_code(KC_KP_PLUS);
-    unregister_code(KC_KP_MINUS);
-    if (zoom_using_cmd) {
-        unregister_code(KC_LGUI);
-    } else {
-        unregister_code(KC_LCTL);
-    }
-
-    zoom_active = false;
-}
 
 // OS detection toggle
 static bool os_detection_enabled = true;
@@ -249,36 +245,45 @@ os_variant_t get_effective_os_detection(void) {
 
 // ==================== EEPROM ====================
 
-// EEPROM Address Map (within 4KB RP2040 limit)
-// eeconfig_user (32-bit): cursor_speed[0:15], scroll_dir_v[16], scroll_dir_h[17], scroll_speed[18:23]
-// 0x0FA0-0x0FA7: trackpad layer config
-// 0x0FB0: sniper_modifier_mask
-// 0x0FB1: sniper_scale_level
-// 0x0FB2: zoom toggle
-// 0x0FB3: os_detection_enabled
-// 0x0FB4: taps_as_clicks (0=off, 1=on; 0xFF=unset→default off)
-// 0x0FB5: trackpad_enabled (0=off, 1=on; 0xFF=unset→default on)
-// 0x0FC0-0x0FC1: VialRGB colors magic (0x5243 = 'RC')
-// 0x0FC2-0x106F: g_direct_mode_colors (RGB_MATRIX_LED_COUNT * sizeof(HSV) = 174 bytes)
-// 0x1070-0x1071: Indicator config magic (0x494Du = 'IM')
-// 0x1072-0x10DB: indicator_config_t (110 bytes: role_masks[10]*8 + colors[10][3])
-// 0x10DC-0x10DF: reserved gap
-// 0x10E0-0x10E1: OLED config magic (0x4F4Cu = 'OL')
-// 0x10E2-0x1123: oled_config_t (66 bytes)
-#define EEPROM_SNIPER_SETTINGS_OFFSET 0x0FB0
-#define EEPROM_ZOOM_TOGGLE_OFFSET 0x0FB2
-#define EEPROM_OS_DETECTION_OFFSET 0x0FB3
-#define EEPROM_TAPS_AS_CLICKS_OFFSET 0x0FB4
-#define EEPROM_TRACKPAD_ENABLED_OFFSET 0x0FB5
-#define EEPROM_VIALRGB_COLORS_MAGIC_OFFSET 0x0FC0u
-#define EEPROM_VIALRGB_COLORS_DATA_OFFSET 0x0FC2u
+// EEPROM Address Map. Every keymap setting lives in one block at
+// USER_EEPROM_BASE, above Vial's dynamic keymap and macro area, which config.h
+// caps with DYNAMIC_KEYMAP_EEPROM_MAX_ADDR. (The vendor block sat at
+// 0x0FA0-0x17FF, inside the macro buffer that runs to the end of the 32 KB
+// emulated EEPROM, so long macros overwrote it and a new build's macro reset
+// zeroed it.) Offsets are from USER_EEPROM_BASE:
+// eeconfig_user (32-bit, not in this block): cursor_speed[0:15], scroll_dir_v[16], scroll_dir_h[17], scroll_speed[18:23]
+// +0x000-0x007: trackpad layer config (magic + 3 masks)
+// +0x010: sniper_modifier_mask   +0x011: sniper_scale_level
+// +0x012: zoom toggle            +0x013: os_detection_enabled   (0x01 on, 0x02 off, else unset)
+// +0x014: taps_as_clicks         +0x015: trackpad_enabled       (0x01 on, 0x02 off, else unset)
+// +0x018-0x01B: shared OLED+RGB sleep timeout, uint32 ms
+// +0x020-0x021: VialRGB colours magic ('RC'), +0x022: g_direct_mode_colors (58 LEDs * 3 = 174 bytes)
+// +0x0D0-0x0D1: indicator config magic ('IM'), +0x0D2: indicator_config_t (110 bytes)
+// +0x140-0x141: OLED config magic ('OL'),      +0x142: oled_config_t (66 bytes)
+// +0x190-0x191: per-LED indicator colour magic ('IC'), +0x192: colours
+// Overlaps and the end of the EEPROM are checked by the _Static_asserts below.
+#define USER_EEPROM_BASE 0x7000u
+_Static_assert(USER_EEPROM_BASE > DYNAMIC_KEYMAP_EEPROM_MAX_ADDR, "keymap EEPROM block overlaps Vial's dynamic keymap/macro area");
+#define EEPROM_SNIPER_SETTINGS_OFFSET (USER_EEPROM_BASE + 0x010)
+#define EEPROM_ZOOM_TOGGLE_OFFSET (USER_EEPROM_BASE + 0x012)
+#define EEPROM_OS_DETECTION_OFFSET (USER_EEPROM_BASE + 0x013)
+#define EEPROM_TAPS_AS_CLICKS_OFFSET (USER_EEPROM_BASE + 0x014)
+#define EEPROM_TRACKPAD_ENABLED_OFFSET (USER_EEPROM_BASE + 0x015)
+#define EEPROM_VIALRGB_COLORS_MAGIC_OFFSET (USER_EEPROM_BASE + 0x020u)
+#define EEPROM_VIALRGB_COLORS_DATA_OFFSET (USER_EEPROM_BASE + 0x022u)
 #define VIALRGB_COLORS_EEPROM_MAGIC 0x5243u /* 'R','C' — RGB Customise */
-#define EEPROM_INDICATOR_MAGIC_OFFSET 0x1070u
-#define EEPROM_INDICATOR_DATA_OFFSET 0x1072u
+#define EEPROM_INDICATOR_MAGIC_OFFSET (USER_EEPROM_BASE + 0x0D0u)
+#define EEPROM_INDICATOR_DATA_OFFSET (USER_EEPROM_BASE + 0x0D2u)
 #define INDICATOR_EEPROM_MAGIC 0x494Du /* 'I','M' — Indicator bitmask v5 */
-#define EEPROM_OLED_MAGIC_OFFSET 0x10E0u
-#define EEPROM_OLED_DATA_OFFSET 0x10E2u
-#define OLED_EEPROM_MAGIC 0x4F4Cu /* 'O','L' — OLED labels */
+#define EEPROM_OLED_MAGIC_OFFSET (USER_EEPROM_BASE + 0x140u)
+/* (v5.11) per-LED indicator colours: magic 'IC', then [role][led][r,g,b], then
+ * (72-LED boards) the LED 64..71 membership bytes. Placed after the OLED block. */
+#define EEPROM_INDICATOR_LED_MAGIC_OFFSET (USER_EEPROM_BASE + 0x190u)
+#define EEPROM_INDICATOR_LED_DATA_OFFSET (USER_EEPROM_BASE + 0x192u)
+#define INDICATOR_LED_EEPROM_MAGIC 0x4943u /* 'I','C' */
+#define EEPROM_OLED_DATA_OFFSET (USER_EEPROM_BASE + 0x142u)
+#define OLED_EEPROM_MAGIC 0x4F4Cu           /* 'O','L' — OLED labels */
+#define EEPROM_SLEEP_TIMEOUT_OFFSET (USER_EEPROM_BASE + 0x018u) /* uint32 shared sleep timeout (ms) */
 
 static void save_user_settings(void) {
     uint8_t cursor_level = digitizer_get_mouse_scale();
@@ -312,18 +317,29 @@ void load_sniper_settings(void) {
     digitizer_set_sniper_active(false);
 }
 
+/* On/off flags that default to ON are stored as 0x01 (on) / 0x02 (off), so
+ * both erased states (0xFF, and 0x00 from a wiped wear-leveling store) read as
+ * "unset" and fall back to the default instead of silently turning it off. */
+#define EEPROM_FLAG_ON 0x01
+#define EEPROM_FLAG_OFF 0x02
+
+static bool load_default_on_flag(uintptr_t addr) {
+    uint8_t stored = eeprom_read_byte((uint8_t *)addr);
+    if (stored == EEPROM_FLAG_OFF) return false;
+    if (stored != EEPROM_FLAG_ON) eeprom_write_byte((uint8_t *)addr, EEPROM_FLAG_ON);
+    return true;
+}
+
+static void save_flag(uintptr_t addr, bool on) {
+    eeprom_update_byte((uint8_t *)addr, on ? EEPROM_FLAG_ON : EEPROM_FLAG_OFF);
+}
+
 void save_zoom_setting(void) {
-    eeprom_write_byte((uint8_t *)(EEPROM_ZOOM_TOGGLE_OFFSET), zoom_enabled ? 1 : 0);
+    save_flag(EEPROM_ZOOM_TOGGLE_OFFSET, zoom_enabled);
 }
 
 void load_zoom_setting(void) {
-    uint8_t stored_zoom = eeprom_read_byte((uint8_t *)(EEPROM_ZOOM_TOGGLE_OFFSET));
-    if (stored_zoom == 0xFF) {
-        zoom_enabled = true;
-        save_zoom_setting();
-    } else {
-        zoom_enabled = (stored_zoom != 0);
-    }
+    zoom_enabled = load_default_on_flag(EEPROM_ZOOM_TOGGLE_OFFSET);
 }
 
 static void save_taps_as_clicks(void) {
@@ -341,38 +357,25 @@ static void load_taps_as_clicks(void) {
 }
 
 static void save_trackpad_enabled(void) {
-    eeprom_write_byte((uint8_t *)(EEPROM_TRACKPAD_ENABLED_OFFSET), trackpad_enabled ? 0x01 : 0x02);
+    save_flag(EEPROM_TRACKPAD_ENABLED_OFFSET, trackpad_enabled);
 }
 
 static void load_trackpad_enabled(void) {
-    uint8_t stored = eeprom_read_byte((uint8_t *)(EEPROM_TRACKPAD_ENABLED_OFFSET));
-    if (stored == 0x02) {
-        trackpad_enabled = false;
-    } else {
-        // 0x01 = explicitly on; 0xFF/0x00/other = unset (default on)
-        trackpad_enabled = true;
-        if (stored != 0x01) save_trackpad_enabled(); // migrate to new encoding
-    }
+    trackpad_enabled = load_default_on_flag(EEPROM_TRACKPAD_ENABLED_OFFSET);
 }
 
 void os_detection_settings_init(void) {
-    uint8_t stored_state = eeprom_read_byte((uint8_t *)EEPROM_OS_DETECTION_OFFSET);
-    if (stored_state == 0xFF) {
-        os_detection_enabled = true;
-        eeprom_write_byte((uint8_t *)EEPROM_OS_DETECTION_OFFSET, 1);
-    } else {
-        os_detection_enabled = (stored_state != 0);
-    }
+    os_detection_enabled = load_default_on_flag(EEPROM_OS_DETECTION_OFFSET);
 }
 
 void toggle_os_detection(void) {
     os_detection_enabled = !os_detection_enabled;
-    eeprom_write_byte((uint8_t *)EEPROM_OS_DETECTION_OFFSET, os_detection_enabled ? 1 : 0);
+    save_flag(EEPROM_OS_DETECTION_OFFSET, os_detection_enabled);
 }
 
 // ==================== Trackpad Layer Config ====================
 
-#define EECONFIG_USER_TRACKPAD_OFFSET 0x0FA0
+#define EECONFIG_USER_TRACKPAD_OFFSET (USER_EEPROM_BASE + 0x000)
 #define TRACKPAD_CONFIG_MAGIC 0x7401
 
 typedef struct {
@@ -381,10 +384,13 @@ typedef struct {
     uint16_t swipe3_layers;
 } trackpad_layer_config_t;
 
+/* arleo: no layer gets 1-finger scroll/swipe by default. The vendor default
+ * (scroll on layer 1, swipe on 2 and 3) landed on STRDY, SYMB and NUMB here.
+ * Only used in mouse-fallback mode; runtime changes persist at USER_EEPROM_BASE. */
 static trackpad_layer_config_t user_config = {
-    .scroll_layers = (1 << 1),
-    .swipe2_layers = (1 << 2),
-    .swipe3_layers = (1 << 3),
+    .scroll_layers = 0,
+    .swipe2_layers = 0,
+    .swipe3_layers = 0,
 };
 
 void trackpad_config_save(void) {
@@ -449,11 +455,54 @@ typedef struct {
 
 static indicator_config_t g_indicator_config; /* zero-init; filled by indicator_config_init_defaults */
 
+/* Per-LED colour for each role (VIALRGB 0x48): a role's LEDs come from role_masks
+ * (plus g_indicator_masks_hi on boards with more than 64 LEDs), and each one is drawn
+ * in its own colour from here. g_indicator_config.colors[role] stays as the role's
+ * default/brush colour; a 0x46 SET repaints the whole role with it. */
+static uint8_t g_indicator_led_colors[INDICATOR_NUM_ROLES][RGB_MATRIX_LED_COUNT][3];
+
+#    if RGB_MATRIX_LED_COUNT > 64
+/* Membership of LEDs 64..71 (0x45 with VIALRGB_INDICATOR_MASK_HI); the 64-bit
+ * role_masks cannot hold them. Stored after the per-LED colours in EEPROM. */
+_Static_assert(RGB_MATRIX_LED_COUNT <= 72, "g_indicator_masks_hi holds LEDs 64..71 only");
+static uint8_t g_indicator_masks_hi[INDICATOR_NUM_ROLES];
+#    endif
+
+static inline bool indicator_has_led(uint8_t role, uint8_t led) {
+    if (led < 64) return (g_indicator_config.role_masks[role] >> led) & 1;
+#    if RGB_MATRIX_LED_COUNT > 64
+    return (g_indicator_masks_hi[role] >> (led - 64)) & 1;
+#    else
+    return false;
+#    endif
+}
+
+/* Roles whose per-LED colours still need pushing to the slave (bit = role). */
+static uint16_t g_indicator_led_dirty = (1u << INDICATOR_NUM_ROLES) - 1;
+
+static void indicator_fill_role_leds(uint8_t role) {
+    for (uint8_t led = 0; led < RGB_MATRIX_LED_COUNT; led++) {
+        memcpy(g_indicator_led_colors[role][led], g_indicator_config.colors[role], 3);
+    }
+    g_indicator_led_dirty |= (1u << role);
+}
+
 /* OLED label config — row1 + one name per layer, all max 5 chars + null */
 typedef struct {
     char row1[6];            /* keyboard name shown on OLED row 1 (default "SOFLE") */
     char layer_names[10][6]; /* one 5-char label per layer (default "L0".."L9")   */
 } __attribute__((packed)) oled_config_t;
+
+/* (v5.11) per-LED indicator block: after the OLED block, inside the EEPROM. */
+#    if RGB_MATRIX_LED_COUNT > 64
+#        define INDICATOR_LED_EEPROM_SIZE (sizeof(g_indicator_led_colors) + sizeof(g_indicator_masks_hi))
+#    else
+#        define INDICATOR_LED_EEPROM_SIZE (sizeof(g_indicator_led_colors))
+#    endif
+_Static_assert(EEPROM_VIALRGB_COLORS_DATA_OFFSET + RGB_MATRIX_LED_COUNT * sizeof(HSV) <= EEPROM_INDICATOR_MAGIC_OFFSET, "VialRGB direct colours overlap the indicator block");
+_Static_assert(EEPROM_INDICATOR_DATA_OFFSET + sizeof(indicator_config_t) <= EEPROM_OLED_MAGIC_OFFSET, "indicator block overlaps the OLED block");
+_Static_assert(EEPROM_OLED_DATA_OFFSET + sizeof(oled_config_t) <= EEPROM_INDICATOR_LED_MAGIC_OFFSET, "OLED block overlaps the per-LED indicator colours");
+_Static_assert(EEPROM_INDICATOR_LED_DATA_OFFSET + INDICATOR_LED_EEPROM_SIZE <= WEAR_LEVELING_LOGICAL_SIZE, "per-LED indicator colours run past the end of the EEPROM");
 
 static oled_config_t g_oled_config = {.row1 = "SOFLE", .layer_names = {"QWERT", "STRDY", "SYMBL", "NUMBR", "FUNCT", "NAVIG", "GAME1", "GAME2", "BOORU", "MOUSE"}};
 
@@ -484,10 +533,21 @@ static void indicator_config_init_defaults(void) {
         g_indicator_config.colors[i][0] = dr[i];
         g_indicator_config.colors[i][1] = dg[i];
         g_indicator_config.colors[i][2] = db[i];
+        indicator_fill_role_leds(i);
     }
+#    if RGB_MATRIX_LED_COUNT > 64
+    memset(g_indicator_masks_hi, 0, sizeof(g_indicator_masks_hi));
+#    endif
 }
 
 void vialrgb_get_indicator_leds_user(uint8_t role_idx, uint8_t *out) {
+#    if RGB_MATRIX_LED_COUNT > 64
+    if ((role_idx & VIALRGB_INDICATOR_MASK_HI) && (role_idx & 0x7F) < INDICATOR_NUM_ROLES) {
+        memset(out, 0, 8);
+        out[0] = g_indicator_masks_hi[role_idx & 0x7F]; /* bit i = LED 64 + i */
+        return;
+    }
+#    endif
     /* Returns 8 bytes: little-endian uint64 bitmask for the given role. */
     if (role_idx >= INDICATOR_NUM_ROLES) {
         memset(out, 0, 8);
@@ -515,18 +575,19 @@ static bool g_indicator_sync_needed = true;
 /* TP_INFO: one-shot RPC from master — pushes current trackpad/OS state to slave OLED */
 #    define TP_INFO_DURATION_MS 5000
 typedef struct {
-    uint8_t os_variant;
-    bool    ptp_mode;
-    bool    trackpad_on;
-    uint8_t gesture_mode; // 0=CURSR 1=SCROL 2=2SWPE 3=3SWPE
-    uint8_t dpi;
-    uint8_t sniper_dpi;
-    uint8_t scroll_spd;
-    bool    sniper_active;
-    bool    show_overlay;       // true = TP_INFO keypress; false = background auto-sync
-    bool    os_detect_enabled;  // mirrors master's os_detection_enabled flag
-    char    row1[5];            // keyboard name (e.g. "SOFLE")
-    char    layer_names[10][6]; // per-layer display names
+    uint8_t  os_variant;
+    bool     ptp_mode;
+    bool     trackpad_on;
+    uint8_t  gesture_mode; // 0=CURSR 1=SCROL 2=2SWPE 3=3SWPE
+    uint8_t  dpi;
+    uint8_t  sniper_dpi;
+    uint8_t  scroll_spd;
+    bool     sniper_active;
+    bool     show_overlay;       // true = TP_INFO keypress; false = background auto-sync
+    bool     os_detect_enabled;  // mirrors master's os_detection_enabled flag
+    uint32_t sleep_timeout;      // v5.06: shared OLED+RGB sleep timeout (ms)
+    char     row1[5];            // keyboard name (e.g. "SOFLE")
+    char     layer_names[10][6]; // per-layer display names
 } __attribute__((packed)) tp_info_payload_t;
 static tp_info_payload_t  g_tp_info_data         = {0};
 static bool               tp_info_active         = false;
@@ -536,6 +597,13 @@ static bool               g_slave_sync_valid     = false; // true after first au
 
 void vialrgb_set_indicator_leds_user(uint8_t role_idx, const uint8_t *mask_bytes) {
     /* Receives 8 bytes: little-endian uint64 bitmask for the given role. */
+#    if RGB_MATRIX_LED_COUNT > 64
+    if ((role_idx & VIALRGB_INDICATOR_MASK_HI) && (role_idx & 0x7F) < INDICATOR_NUM_ROLES) {
+        g_indicator_masks_hi[role_idx & 0x7F] = mask_bytes[0]; /* LEDs 64..71 */
+        g_indicator_led_dirty |= (1u << (role_idx & 0x7F));    /* slave gets it with the colours */
+        return;
+    }
+#    endif
     if (role_idx >= INDICATOR_NUM_ROLES) return;
 
     uint64_t mask = 0;
@@ -552,9 +620,30 @@ void vialrgb_set_indicator_colors_user(const uint8_t *cols) {
         g_indicator_config.colors[i][0] = cols[i * 3];
         g_indicator_config.colors[i][1] = cols[i * 3 + 1];
         g_indicator_config.colors[i][2] = cols[i * 3 + 2];
+        /* One colour per role (old protocol): repaint the role's LEDs with it. Hosts
+         * that know 0x48 send their per-LED colours after this. */
+        indicator_fill_role_leds(i);
     }
 
     g_indicator_sync_needed = true;
+}
+
+bool vialrgb_get_indicator_led_colors_user(uint8_t role, uint8_t first, uint8_t *count_out, uint8_t *rgb_out) {
+    *count_out = 0;
+    if (role < INDICATOR_NUM_ROLES && first < RGB_MATRIX_LED_COUNT) {
+        uint8_t n = RGB_MATRIX_LED_COUNT - first;
+        if (n > VIALRGB_INDICATOR_LED_COLORS_MAX) n = VIALRGB_INDICATOR_LED_COLORS_MAX;
+        memcpy(rgb_out, g_indicator_led_colors[role][first], n * 3);
+        *count_out = n;
+    }
+    return true; /* supported, even for an out-of-range request (count 0) */
+}
+
+void vialrgb_set_indicator_led_colors_user(uint8_t role, uint8_t first, uint8_t count, const uint8_t *rgb_in) {
+    if (role >= INDICATOR_NUM_ROLES || first >= RGB_MATRIX_LED_COUNT) return;
+    if (count > RGB_MATRIX_LED_COUNT - first) count = RGB_MATRIX_LED_COUNT - first;
+    memcpy(g_indicator_led_colors[role][first], rgb_in, count * 3);
+    g_indicator_led_dirty |= (1u << role);
 }
 
 static void vialrgb_indicator_sync_handler(uint8_t in_buflen, const void *in_data, uint8_t out_buflen, void *out_data) {
@@ -562,6 +651,23 @@ static void vialrgb_indicator_sync_handler(uint8_t in_buflen, const void *in_dat
     if (in_buflen < sizeof(indicator_config_t)) return;
 
     memcpy(&g_indicator_config, in_data, sizeof(indicator_config_t));
+}
+
+/* Per-LED indicator colours for the slave's half, one role per packet:
+ * [role][start_led][LED 64..71 membership][r,g,b x VIALRGB_SPLIT_LEFT].
+ * Same symmetric-halves assumption as VIALRGB_DIRECT_SYNC. */
+#    define INDICATOR_LED_SYNC_LEN (3 + VIALRGB_SPLIT_LEFT * 3)
+_Static_assert(INDICATOR_LED_SYNC_LEN <= RPC_M2S_BUFFER_SIZE, "per-LED indicator sync packet does not fit RPC_M2S_BUFFER_SIZE");
+_Static_assert(RGB_MATRIX_LED_COUNT == 2 * VIALRGB_SPLIT_LEFT, "per-LED indicator sync assumes both halves have the same LED count");
+
+static void vialrgb_indicator_led_sync_handler(uint8_t in_buflen, const void *in_data, uint8_t out_buflen, void *out_data) {
+    const uint8_t *p = (const uint8_t *)in_data;
+    if (in_buflen < INDICATOR_LED_SYNC_LEN) return;
+    if (p[0] >= INDICATOR_NUM_ROLES || (uint16_t)p[1] + VIALRGB_SPLIT_LEFT > RGB_MATRIX_LED_COUNT) return;
+#    if RGB_MATRIX_LED_COUNT > 64
+    g_indicator_masks_hi[p[0]] = p[2];
+#    endif
+    memcpy(g_indicator_led_colors[p[0]][p[1]], p + 3, VIALRGB_SPLIT_LEFT * 3);
 }
 
 /* Trackpad settings — exposed to Vial GUI via sub-ID 0x50.
@@ -580,9 +686,12 @@ void vialrgb_get_trackpad_settings_user(uint8_t *args) {
 }
 
 void vialrgb_set_trackpad_settings_user(const uint8_t *args) {
-    digitizer_set_mouse_scale(args[0]);
-    scroll_speed = args[1];
-    digitizer_set_scroll_scale(args[1]);
+    // Out-of-range speeds are ignored rather than stored (boot rejects them anyway).
+    if (args[0] >= MIN_CURSOR_SPEED && args[0] <= MAX_CURSOR_SPEED) digitizer_set_mouse_scale(args[0]);
+    if (args[1] >= MIN_SCROLL_SPEED && args[1] <= MAX_SCROLL_SPEED) {
+        scroll_speed = args[1];
+        digitizer_set_scroll_scale(args[1]);
+    }
     scroll_dir_v = args[2] ? 1 : 0;
     scroll_dir_h = args[3] ? 1 : 0;
     zoom_enabled = args[4] != 0;
@@ -613,6 +722,20 @@ void vialrgb_set_trackpad_layers_user(const uint8_t *args) {
     user_config.swipe2_layers = args[2] | ((uint16_t)args[3] << 8);
     user_config.swipe3_layers = args[4] | ((uint16_t)args[5] << 8);
     trackpad_config_save();
+}
+
+/* Sub-ID 0x53 — shared OLED+RGB sleep timeout (whole minutes on the wire). */
+void vialrgb_get_power_settings_user(uint8_t *args) {
+    args[0] = (uint8_t)(g_sleep_timeout / 60000u);
+}
+
+void vialrgb_set_power_settings_user(const uint8_t *args) {
+    uint32_t ms = (uint32_t)args[0] * 60000u;
+    if (ms < MIN_SLEEP_TIMEOUT_MS) ms = MIN_SLEEP_TIMEOUT_MS;
+    if (ms > MAX_SLEEP_TIMEOUT_MS) ms = MAX_SLEEP_TIMEOUT_MS;
+    g_sleep_timeout = ms;
+    apply_sleep_timeout();
+    eeprom_write_dword((uint32_t *)EEPROM_SLEEP_TIMEOUT_OFFSET, g_sleep_timeout);
 }
 
 /* Sub-ID 0x52 — OLED label get/set.
@@ -657,29 +780,38 @@ void vialrgb_save_user(void) {
     eeprom_write_block(g_direct_mode_colors, (void *)EEPROM_VIALRGB_COLORS_DATA_OFFSET, RGB_MATRIX_LED_COUNT * sizeof(HSV));
     eeprom_write_word((uint16_t *)EEPROM_INDICATOR_MAGIC_OFFSET, INDICATOR_EEPROM_MAGIC);
     eeprom_write_block(&g_indicator_config, (void *)EEPROM_INDICATOR_DATA_OFFSET, sizeof(indicator_config_t));
+    eeprom_write_word((uint16_t *)EEPROM_INDICATOR_LED_MAGIC_OFFSET, INDICATOR_LED_EEPROM_MAGIC);
+    eeprom_write_block(g_indicator_led_colors, (void *)EEPROM_INDICATOR_LED_DATA_OFFSET, sizeof(g_indicator_led_colors));
+#    if RGB_MATRIX_LED_COUNT > 64
+    eeprom_write_block(g_indicator_masks_hi, (void *)(EEPROM_INDICATOR_LED_DATA_OFFSET + sizeof(g_indicator_led_colors)), sizeof(g_indicator_masks_hi));
+#    endif
 }
 #endif
 
 static void tp_info_sync_handler(uint8_t in_buflen, const void *in_data, uint8_t out_buflen, void *out_data) {
-    if (in_buflen < sizeof(tp_info_payload_t)) return;
-
-    memcpy(&g_tp_info_data, in_data, sizeof(tp_info_payload_t));
-    g_slave_sync_valid = true;
-    memcpy(g_oled_config.row1, g_tp_info_data.row1, sizeof(g_tp_info_data.row1));
-    memcpy(g_oled_config.layer_names, g_tp_info_data.layer_names, sizeof(g_tp_info_data.layer_names));
-    if (g_tp_info_data.show_overlay) {
-        tp_info_active = true;
-        tp_info_timer  = timer_read32();
+    if (in_buflen >= sizeof(tp_info_payload_t)) {
+        memcpy(&g_tp_info_data, in_data, sizeof(tp_info_payload_t));
+        g_slave_sync_valid = true;
+        memcpy(g_oled_config.row1, g_tp_info_data.row1, sizeof(g_tp_info_data.row1));
+        memcpy(g_oled_config.layer_names, g_tp_info_data.layer_names, sizeof(g_tp_info_data.layer_names));
+        /* v5.06: adopt master's shared sleep timeout so both halves sleep together */
+        if (g_tp_info_data.sleep_timeout >= MIN_SLEEP_TIMEOUT_MS && g_tp_info_data.sleep_timeout <= MAX_SLEEP_TIMEOUT_MS) {
+            g_sleep_timeout = g_tp_info_data.sleep_timeout;
+            apply_sleep_timeout();
+        }
+        if (g_tp_info_data.show_overlay) {
+            tp_info_active = true;
+            tp_info_timer  = timer_read32();
+        }
     }
 }
 
 // ==================== Housekeeping ====================
 
+static void aurora_task(void); /* wake-up animation, defined with the RGB indicators below */
+
 void housekeeping_task_user(void) {
-    static layer_state_t state = 0;
-    if (layer_state != state) {
-        state = layer_state_set_user(layer_state);
-    }
+    aurora_task();
 
 #if defined(VIALRGB_ENABLE) && !defined(VIALRGB_NO_DIRECT)
     if (is_keyboard_master()) {
@@ -706,6 +838,35 @@ void housekeeping_task_user(void) {
                 last_indicator_sync     = timer_read32();
             }
         }
+        /* Per-LED indicator colours: one role per pass -- dirty roles first, then a
+         * slow round-robin (one role per second) as the same boot-time fallback. */
+        static uint32_t last_led_sync = 0, last_led_attempt = 0;
+        static uint8_t  led_sync_next = 0;
+        if ((g_indicator_led_dirty || timer_elapsed32(last_led_sync) >= 1000) && timer_elapsed32(last_led_attempt) >= 20) { /* don't hammer a missing slave */
+            last_led_attempt = timer_read32();
+            uint8_t role     = led_sync_next;
+            for (uint8_t i = 0; i < INDICATOR_NUM_ROLES; i++) {
+                if (g_indicator_led_dirty & (1u << i)) {
+                    role = i;
+                    break;
+                }
+            }
+            uint8_t        slave_start = is_keyboard_left() ? VIALRGB_SPLIT_LEFT : 0;
+            static uint8_t led_buf[INDICATOR_LED_SYNC_LEN];
+            led_buf[0] = role;
+            led_buf[1] = slave_start;
+#    if RGB_MATRIX_LED_COUNT > 64
+            led_buf[2] = g_indicator_masks_hi[role];
+#    else
+            led_buf[2] = 0;
+#    endif
+            memcpy(&led_buf[3], g_indicator_led_colors[role][slave_start], VIALRGB_SPLIT_LEFT * 3);
+            if (transaction_rpc_exec(VIALRGB_INDICATOR_LED_SYNC, sizeof(led_buf), led_buf, 0, NULL)) {
+                g_indicator_led_dirty &= ~(1u << role);
+                last_led_sync = timer_read32();
+                if (role == led_sync_next) led_sync_next = (led_sync_next + 1) % INDICATOR_NUM_ROLES;
+            }
+        }
     }
 #endif
 
@@ -728,6 +889,7 @@ void housekeeping_task_user(void) {
                                                                                   : 0,
                 .show_overlay      = false,
                 .os_detect_enabled = os_detection_enabled,
+                .sleep_timeout     = g_sleep_timeout,
             };
 
             memcpy(payload.row1, g_oled_config.row1, sizeof(payload.row1));
@@ -754,6 +916,7 @@ void housekeeping_task_user(void) {
                                                                               : 0,
             .show_overlay      = true,
             .os_detect_enabled = os_detection_enabled,
+            .sleep_timeout     = g_sleep_timeout,
         };
 
         memcpy(payload.row1, g_oled_config.row1, sizeof(payload.row1));
@@ -790,12 +953,215 @@ void housekeeping_task_user(void) {
     }
 }
 
+// ==================== Wake-up animation: Aurora tide ====================
+/* Plays once, ~4.5 s, when the board is plugged in or the PC starts up: two broad
+ * tides roll left -> right across both halves (sharp bright crest, long tail that
+ * fades through teal to deep indigo, dark ahead of it), and the second one brings
+ * the user's own effect in behind it. It never touches the saved RGB mode or
+ * brightness, and it does not play when RGB is switched off (the indicator
+ * callback it lives in does not run then).
+ *
+ * Timing is kept in each half's OWN timer (timer_read32), never sync_timer:
+ *  - Plug-in: both halves get power at the same instant, so each simply runs the
+ *    animation from its own power-on (start = 0). No message is needed, and a
+ *    half that is slow to boot (the trackpad half) still lands on the right frame.
+ *  - PC start-up while already powered (a fresh USB enumeration: CONFIGURED
+ *    reached from INIT; waking from sleep comes from SUSPEND and is ignored): the
+ *    master starts and sends the slave "ms elapsed since start" over AURORA_SYNC,
+ *    re-sent until delivered. The slave converts that to its own clock in its main
+ *    loop, so the two clocks never have to agree.
+ *  Some hosts reset the bus on wake instead of resuming; that counts as fresh.
+ *  A PC start enumerates twice (BIOS, then the OS), and plug-in is followed by an
+ *  enumeration; AURORA_REPLAY_GUARD_MS swallows those.
+ * AURORA_SETTLE_MS keeps LEDs dark while the trackpad takes its power-up baseline
+ * (it shares the rail with the LEDs). */
+#if defined(AURORA_WAKE_ENABLE) && defined(RGB_MATRIX_ENABLE)
+#    include "transactions.h"
+#    include <lib/lib8tion/lib8tion.h>
+
+#    define AURORA_SETTLE_MS 300
+#    define AURORA_TIDE_GAP_MS 1900 /* second tide starts this long after the first */
+#    define AURORA_SPEED_NUM 16     /* crest speed = 16/100 x-units per ms (~1.7 s across) */
+#    define AURORA_SPEED_DEN 100
+#    define AURORA_START_X (-40) /* crest starts just off the left edge */
+#    define AURORA_WASH_NEAR 30  /* behind the last crest: aurora fades out from here ... */
+#    define AURORA_WASH_FAR 60   /* ... and the user's effect shows from here */
+#    define AURORA_TOTAL_MS 4500 /* last crest past the right edge + wash distance */
+#    define AURORA_REPLAY_GUARD_MS 120000
+#    define AURORA_DARK_LUM 26 /* below this the LED is off */
+
+typedef enum { AURORA_IDLE, AURORA_PLAYING } aurora_state_t;
+/* Both halves start playing at power-on (= plug-in), timed from their own boot. */
+static aurora_state_t    aurora_state     = AURORA_PLAYING;
+static uint32_t          aurora_start     = 0;     /* local timer_read32() domain */
+static uint32_t          aurora_last_play = 0;     /* master: replay guard */
+static bool              aurora_send      = false; /* master: elapsed not yet delivered */
+static uint32_t          aurora_send_at   = 0;
+static volatile bool     aurora_usb_fresh = false; /* set from the USB ISR */
+static volatile bool     aurora_rx        = false; /* slave: set from the RPC ISR */
+static volatile uint32_t aurora_rx_elapsed;
+
+/* Runs in the USB event ISR: flags only. */
+void notify_usb_device_state_change_user(struct usb_device_state s) {
+    static usb_configure_state_t prev = USB_DEVICE_STATE_NO_INIT;
+    if (s.configure_state == USB_DEVICE_STATE_CONFIGURED && prev != USB_DEVICE_STATE_SUSPEND) {
+        aurora_usb_fresh = true;
+    }
+    prev = s.configure_state;
+}
+
+/* Slave, in the transport ISR: store only; aurora_task() does the clock maths. */
+static void aurora_sync_handler(uint8_t in_buflen, const void *in_data, uint8_t out_buflen, void *out_data) {
+    if (in_buflen < sizeof(uint32_t)) return;
+    uint32_t elapsed;
+    memcpy(&elapsed, in_data, sizeof(elapsed));
+    aurora_rx_elapsed = elapsed;
+    aurora_rx         = true;
+}
+
+static void aurora_init(void) {
+    transaction_register_rpc(AURORA_SYNC, aurora_sync_handler);
+}
+
+static void aurora_task(void) {
+    uint32_t now = timer_read32();
+    if (is_keyboard_master()) {
+        if (aurora_usb_fresh) {
+            aurora_usb_fresh = false;
+            /* the power-up run counts as a play at t = 0 */
+            if (TIMER_DIFF_32(now, aurora_last_play) >= AURORA_REPLAY_GUARD_MS) {
+                aurora_state     = AURORA_PLAYING;
+                aurora_start     = now;
+                aurora_last_play = now;
+                aurora_send      = true;
+                aurora_send_at   = now - 50; /* send on this pass */
+            }
+        }
+        /* PC start-up: tell the slave how far in we are; retry every 50 ms. */
+        if (aurora_send && TIMER_DIFF_32(now, aurora_send_at) >= 50) {
+            aurora_send_at   = now;
+            uint32_t elapsed = TIMER_DIFF_32(now, aurora_start);
+            if (elapsed >= AURORA_TOTAL_MS || transaction_rpc_exec(AURORA_SYNC, sizeof(elapsed), &elapsed, 0, NULL)) {
+                aurora_send = false;
+            }
+        }
+    } else if (aurora_rx) {
+        aurora_rx    = false;
+        aurora_start = now - aurora_rx_elapsed;
+        aurora_state = AURORA_PLAYING;
+    }
+    if (aurora_state == AURORA_PLAYING && TIMER_DIFF_32(now, aurora_start) >= AURORA_TOTAL_MS) {
+        aurora_state = AURORA_IDLE;
+    }
+}
+
+/* Crest front, 255 * exp(-(d/16)^2) for d = 0..40 x-units ahead of the crest. */
+static const uint8_t aurora_front[41] = {
+    255, 254, 251, 246, 240, 231, 222, 211, 199, 186, 173, 159, 145, 132, 119, 106, 94, 82, 72, 62, 53, 46, 38, 32, 27, 22, 18, 15, 12, 10, 8, 6, 5, 4, 3, 2, 2, 1, 1, 1, 0,
+};
+
+/* Brightness vs distance d from a crest (d > 0 = ahead): sharp front, long tail
+ * behind that halves every 48 units (~exp(d/70)). */
+static uint8_t aurora_profile(int16_t d) {
+    if (d >= 0) return d > 40 ? 0 : aurora_front[d];
+    uint16_t n = (uint16_t)(-d);
+    uint8_t  q = n / 48, r = n % 48;
+    if (q >= 8) return 0;
+    uint8_t hi = 255 >> q, lo = 255 >> (q + 1);
+    return hi - (uint8_t)((uint16_t)(hi - lo) * r / 48);
+}
+
+/* Draws this half's LEDs. Returns true while the aurora owns the frame. */
+static bool aurora_render(uint8_t led_min, uint8_t led_max) {
+    if (aurora_state == AURORA_IDLE) return false;
+    uint32_t t = TIMER_DIFF_32(timer_read32(), aurora_start);
+    if (t >= AURORA_TOTAL_MS) return false;
+    if (t < AURORA_SETTLE_MS) {
+        for (uint8_t led = led_min; led < led_max; led++)
+            rgb_matrix_set_color(led, 0, 0, 0);
+        return true;
+    }
+
+    /* Follow the user's brightness, but never so dim the show is lost. */
+    uint8_t bright = rgb_matrix_get_val();
+    if (bright < RGB_MATRIX_MAXIMUM_BRIGHTNESS / 2) bright = RGB_MATRIX_MAXIMUM_BRIGHTNESS / 2;
+
+    /* Crest positions of the two tides (x-units); the second is the last. */
+    int32_t c1 = AURORA_START_X + (int32_t)(t - AURORA_SETTLE_MS) * AURORA_SPEED_NUM / AURORA_SPEED_DEN;
+    int32_t c2 = t >= AURORA_SETTLE_MS + AURORA_TIDE_GAP_MS ? AURORA_START_X + (int32_t)(t - AURORA_SETTLE_MS - AURORA_TIDE_GAP_MS) * AURORA_SPEED_NUM / AURORA_SPEED_DEN : INT16_MIN;
+
+    for (uint8_t led = led_min; led < led_max; led++) {
+        bool under = g_led_config.flags[led] & LED_FLAG_UNDERGLOW;
+        /* slight diagonal: lower rows (thumbs) trail the top a little */
+        int16_t xs = (int16_t)g_led_config.point[led].x + ((int16_t)g_led_config.point[led].y - 32) * 45 / 128;
+
+        int32_t d1  = xs - c1;
+        uint8_t lum = (d1 > -400 && d1 < 400) ? aurora_profile((int16_t)d1) : 0;
+        uint8_t a   = 255;
+        if (c2 != INT16_MIN) {
+            int32_t d2 = xs - c2;
+            if (d2 <= -AURORA_WASH_FAR) continue; /* washed in: leave the user's effect */
+            uint8_t l2 = d2 < 400 ? aurora_profile((int16_t)d2) : 0;
+            if (l2 > lum) lum = l2;
+            if (d2 < -AURORA_WASH_NEAR) {
+                a = (uint8_t)((d2 + AURORA_WASH_FAR) * 255 / (AURORA_WASH_FAR - AURORA_WASH_NEAR));
+            }
+        }
+
+        if (lum < AURORA_DARK_LUM) {
+            rgb_matrix_set_color(led, 0, 0, 0);
+            continue;
+        }
+        /* brightness -> colour: crest aqua-cyan going white, tail deep indigo */
+        uint8_t k = (uint8_t)((uint16_t)(lum - AURORA_DARK_LUM) * 255 / (255 - AURORA_DARK_LUM));
+        uint8_t h = 172 - (uint8_t)((uint16_t)k * 52 / 255) + (under ? 8 : 0); /* 172 .. 120 */
+        uint8_t s = k > 209 ? 255 - (uint8_t)((uint16_t)(k - 209) * 140 / 46) : 255;
+        uint8_t v = AURORA_DARK_LUM + (uint8_t)((uint16_t)k * (255 - AURORA_DARK_LUM) / 255);
+        if (under) v = scale8(v, 192);
+        v       = scale8(scale8(v, bright), a);
+        RGB rgb = hsv_to_rgb((HSV){h, s, v});
+        rgb_matrix_set_color(led, rgb.r, rgb.g, rgb.b);
+    }
+    return true;
+}
+#else
+static inline void aurora_init(void) {}
+static inline void aurora_task(void) {}
+static inline bool aurora_render(uint8_t led_min, uint8_t led_max) {
+    return false;
+}
+#endif
+
 // ==================== RGB Layer Indicators ====================
 
+#ifndef INDICATOR_BRIGHTNESS_PCT
+#    define INDICATOR_BRIGHTNESS_PCT 100 // 100 = no change; keymap config.h sets the real value
+#endif
+
+#if defined(VIALRGB_ENABLE) && !defined(VIALRGB_NO_DIRECT)
+/* True when at least one LED is assigned to the role (on either half). */
+static inline bool indicator_role_assigned(uint8_t role) {
+    if (g_indicator_config.role_masks[role]) return true;
+#    if RGB_MATRIX_LED_COUNT > 64
+    if (g_indicator_masks_hi[role]) return true;
+#    endif
+    return false;
+}
+#endif
+
 bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
-    uint8_t brightness = rgb_matrix_get_val();
+    /* Wake-up aurora owns the frame while it plays (layer/caps indicators wait). */
+    if (aurora_render(led_min, led_max)) return true;
+
+    // v5.06 update to standardise layer indicator colour brightness with the RGB
+    // effects: scale to INDICATOR_BRIGHTNESS_PCT of the slider so a steady
+    // indicator doesn't out-shine the (usually sub-ceiling) RGB effects.
+    uint8_t brightness = rgb_matrix_get_val() * INDICATOR_BRIGHTNESS_PCT / 100;
     if (brightness == 0) brightness = 1;
-#define SCALE(c) (((c) * brightness / 255) ?: 1)
+/* Scale a channel to the indicator brightness. Channels that are on stay at
+ * least 1 so dim indicators don't vanish; channels that are off stay off (the
+ * old `?: 1` lit every zero channel at 1, tinting pure colours). */
+#define SCALE(c) ((c) == 0 ? 0 : MAX(1, (c) * brightness / 255))
 
     bool set = false;
 
@@ -804,30 +1170,36 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
 
     bool    caps  = host_keyboard_led_state().caps_lock;
     uint8_t layer = get_highest_layer(layer_state);
+    /* While an indicator shows (Caps Lock on, or a layer with LEDs assigned), every LED
+     * not assigned to it is dark instead of running the RGB effect, so the indicator
+     * colours stand alone. Base layer with Caps Lock off: the effect runs untouched.
+     * Uses the whole mask, not this half's LEDs, so both halves blank together. */
+    bool showing = (caps && indicator_role_assigned(0)) || (layer >= 1 && layer < INDICATOR_NUM_ROLES && indicator_role_assigned(layer));
     /* Each role has a bitmask; multiple roles can share the same LED. */
     for (uint8_t led = led_min; led < led_max; led++) {
-        if (led >= 64) continue;
-        uint64_t bit = (1ULL << led);
-        uint8_t  r = 0, g = 0, b = 0;
-        bool     active = false;
+        uint8_t r = 0, g = 0, b = 0;
+        bool    active = false;
         /* Layer indicator (lower priority) */
-        if (layer >= 1 && layer < INDICATOR_NUM_ROLES && (g_indicator_config.role_masks[layer] & bit)) {
-            r      = g_indicator_config.colors[layer][0];
-            g      = g_indicator_config.colors[layer][1];
-            b      = g_indicator_config.colors[layer][2];
+        if (layer >= 1 && layer < INDICATOR_NUM_ROLES && indicator_has_led(layer, led)) {
+            r      = g_indicator_led_colors[layer][led][0];
+            g      = g_indicator_led_colors[layer][led][1];
+            b      = g_indicator_led_colors[layer][led][2];
             active = true;
         }
 
         /* Caps Lock overrides layer */
-        if (caps && (g_indicator_config.role_masks[0] & bit)) {
-            r      = g_indicator_config.colors[0][0];
-            g      = g_indicator_config.colors[0][1];
-            b      = g_indicator_config.colors[0][2];
+        if (caps && indicator_has_led(0, led)) {
+            r      = g_indicator_led_colors[0][led][0];
+            g      = g_indicator_led_colors[0][led][1];
+            b      = g_indicator_led_colors[0][led][2];
             active = true;
         }
 
         if (active) {
             rgb_matrix_set_color(led, SCALE(r), SCALE(g), SCALE(b));
+            set = true;
+        } else if (showing) {
+            rgb_matrix_set_color(led, 0, 0, 0);
             set = true;
         }
     }
@@ -869,59 +1241,28 @@ bool           process_record_user(uint16_t keycode, keyrecord_t *record);
 // ==================== DIP Switch ====================
 
 #if defined(DIP_SWITCH_ENABLE)
-static uint16_t dip_switch_keycode = KC_NO;
+/* Matrix tester: the disc click is not on the matrix, so the position it is replayed
+ * onto is reported to the tester (via_switch_matrix_extra_user, quantum/via.c) while
+ * it is held. */
+static matrix_row_t g_vmatrix[MATRIX_ROWS];
+static void         vmatrix_note(keypos_t k, bool pressed) {
+    if (k.row >= MATRIX_ROWS || k.col >= MATRIX_COLS) return;
+    if (pressed)
+        g_vmatrix[k.row] |= (matrix_row_t)1 << k.col;
+    else
+        g_vmatrix[k.row] &= ~((matrix_row_t)1 << k.col);
+}
+matrix_row_t via_switch_matrix_extra_user(uint8_t row) {
+    return row < MATRIX_ROWS ? g_vmatrix[row] : 0;
+}
 
 bool dip_switch_update_user(uint8_t index, bool active) {
-    if (index != 0) return true;
-
-    keypos_t kp = {.row = 4, .col = 6};
-
-    if (active) {
-        uint16_t kc        = keymap_key_to_keycode(get_highest_layer(layer_state), kp);
-        dip_switch_keycode = kc;
-
-        keyrecord_t record = {.event = {.key = kp, .pressed = true, .time = timer_read(), .type = KEY_EVENT}, .keycode = kc};
-
-        if (kc == RM_TOGG) {
-            rgb_matrix_toggle();
-        } else if (kc == RM_ON) {
-            rgb_matrix_step();
-        } else if (kc >= QK_KB_0) {
-            process_record_user(kc, &record);
-        } else if (IS_QK_TOGGLE_LAYER(kc)) {
-            layer_invert(QK_TOGGLE_LAYER_GET_LAYER(kc));
-        } else if (IS_QK_TO(kc)) {
-            layer_move(QK_TO_GET_LAYER(kc));
-        } else if (IS_QK_MOMENTARY(kc)) {
-            layer_on(QK_MOMENTARY_GET_LAYER(kc));
-        } else if (IS_QK_LAYER_TAP(kc)) {
-            layer_on(QK_LAYER_TAP_GET_LAYER(kc));
-            register_code16(QK_LAYER_TAP_GET_TAP_KEYCODE(kc));
-        } else if (kc >= MS_UP && kc <= MS_ACL2) {
-            register_code16(kc);
-        } else {
-            register_code16(kc);
-        }
-    } else {
-        uint16_t kc = dip_switch_keycode;
-        if (kc != KC_NO) {
-            keyrecord_t record = {.event = {.key = kp, .pressed = false, .time = timer_read(), .type = KEY_EVENT}, .keycode = kc};
-
-            if (IS_QK_MOMENTARY(kc)) {
-                layer_off(QK_MOMENTARY_GET_LAYER(kc));
-            } else if (IS_QK_LAYER_TAP(kc)) {
-                layer_off(QK_LAYER_TAP_GET_LAYER(kc));
-                unregister_code16(QK_LAYER_TAP_GET_TAP_KEYCODE(kc));
-            } else if (kc >= MS_UP && kc <= MS_ACL2) {
-                unregister_code16(kc);
-            } else if (kc >= QK_KB_0) {
-                process_record_user(kc, &record);
-            } else if (!(kc == RM_TOGG || kc == RM_ON || IS_QK_TOGGLE_LAYER(kc) || IS_QK_TO(kc))) {
-                unregister_code16(kc);
-            }
-            dip_switch_keycode = KC_NO;
-        }
-    }
+    /* Indices are per-hand (left = 0, right = 1); each disc's click sits at
+     * column 6 of the last row of its own half. */
+    keypos_t   kp    = {.row = (index == 0) ? 4 : 9, .col = 6};
+    keyevent_t event = {.key = kp, .pressed = active, .time = timer_read(), .type = KEY_EVENT};
+    vmatrix_note(event.key, event.pressed);
+    action_exec(event);
 
     return true;
 }
@@ -929,6 +1270,7 @@ bool dip_switch_update_user(uint8_t index, bool active) {
 
 // ==================== Keymaps ====================
 
+// clang-format off
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [QWERT] = LAYOUT(
         KC_GRV,  KC_1,    KC_2,    KC_3,     KC_4,    KC_5,                       KC_6,    KC_7,    KC_8,    KC_9,   KC_0,    KC_EQUAL,
@@ -1034,73 +1376,48 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][2] = {
     [BORU] = {ENCODER_CCW_CW(KC_TRNS, KC_TRNS), ENCODER_CCW_CW(KC_TRNS, KC_TRNS)},
     [MOUS] = {ENCODER_CCW_CW(KC_TRNS, KC_TRNS), ENCODER_CCW_CW(KC_TRNS, KC_TRNS)}};
 #endif
-
-// ==================== Combos ====================
-// Combos are prepopulated into Vial's dynamic combo array in keyboard_post_init_user().
-// This allows both compile-time combos and runtime Vial configuration to coexist.
-
-// Forward declaration for combo initialization
-static void init_user_combos(void);
-
-// ==================== Key Overrides ====================
-
-#ifdef KEY_OVERRIDE_ENABLE
-const key_override_t dot_key_override  = ko_make_basic(MOD_MASK_SHIFT, KC_DOT, KC_QUES);  // Shift + . is ?
-const key_override_t comm_key_override = ko_make_basic(MOD_MASK_SHIFT, KC_COMM, KC_EXLM); // Shift + , is !
-const key_override_t slsh_key_override = ko_make_basic(MOD_MASK_SHIFT, KC_SLSH, KC_BSLS); // Shift + / is B-Slash
-const key_override_t mply_key_override_nxt = ko_make_basic(MOD_MASK_CTRL, KC_MPLY, KC_MNXT); // Ctrl + Play is Next
-const key_override_t mply_key_override_prv = ko_make_basic(MOD_MASK_SHIFT, KC_MPLY, KC_MPRV); // Shift + Play is Prev
-
-const key_override_t *key_overrides[] = {
-    &dot_key_override,
-    &comm_key_override,
-    &slsh_key_override,
-    &mply_key_override_nxt,
-    &mply_key_override_prv,
-};
-#endif // KEY_OVERRIDE_ENABLE
+// clang-format on
 
 // ==================== Tap-Hold Overrides ====================
-// Non-linear scaling for per-key tapping term and flow tap term adjustments.
-// Offsets are proportional to Vial's dynamic base value, with quadratic easing
-// so that lower base values get smaller percentage offsets (tighter control)
-// and higher base values get larger percentage offsets (more relaxed).
-
-#ifdef QMK_SETTINGS
-#include "qmk_settings.h"
+// Per-key tapping term and flow tap term, derived from the config.h constants
+// TAPPING_TERM and FLOW_TAP_TERM. Offsets are proportional to the base value,
+// with quadratic easing so that lower base values get smaller percentage
+// offsets (tighter control) and higher base values get larger ones (more
+// relaxed). With TAPPING_TERM 240 and FLOW_TAP_TERM 100 this gives:
+//   Shift HRMs 195 ms, pinky Alt HRMs 280 ms, everything else 240 ms;
+//   flow tap 100 ms on the Alt HRMs and 89 ms on the Ctrl HRMs.
 
 // Tapping term scaling parameters
-#define TT_MIN 120   // Minimum reasonable tapping term (ms)
-#define TT_MAX 300   // Maximum reasonable tapping term (ms)
+#define TT_MIN 120 // Minimum reasonable tapping term (ms)
+#define TT_MAX 300 // Maximum reasonable tapping term (ms)
 
 // Flow tap term scaling parameters
-#define FT_MIN 50    // Minimum reasonable flow tap term (ms)
-#define FT_MAX 200   // Maximum reasonable flow tap term (ms)
+#define FT_MIN 50  // Minimum reasonable flow tap term (ms)
+#define FT_MAX 200 // Maximum reasonable flow tap term (ms)
 
 // Offset percentages for tapping term (non-linear: min% at TT_MIN, max% at TT_MAX)
-#define TT_SHIFT_OFFSET_MIN_PCT 15   // Shift keys: 15% faster at low TT
-#define TT_SHIFT_OFFSET_MAX_PCT 25   // Shift keys: 25% faster at high TT
-#define TT_PINKY_OFFSET_MIN_PCT 12    // Pinky keys: 5% slower at low TT
-#define TT_PINKY_OFFSET_MAX_PCT 24   // Pinky keys: 12% slower at high TT
+#define TT_SHIFT_OFFSET_MIN_PCT 15 // Shift keys: 15% faster at low TT
+#define TT_SHIFT_OFFSET_MAX_PCT 25 // Shift keys: 25% faster at high TT
+#define TT_PINKY_OFFSET_MIN_PCT 12 // Pinky keys: 12% slower at low TT
+#define TT_PINKY_OFFSET_MAX_PCT 24 // Pinky keys: 24% slower at high TT
 
 // Offset percentages for flow tap term
-#define FT_CTRL_OFFSET_MIN_PCT 10    // Ctrl keys: 10% faster at low FT
-#define FT_CTRL_OFFSET_MAX_PCT 20    // Ctrl keys: 20% faster at high FT
+#define FT_CTRL_OFFSET_MIN_PCT 10 // Ctrl keys: 10% faster at low FT
+#define FT_CTRL_OFFSET_MAX_PCT 20 // Ctrl keys: 20% faster at high FT
 
 // Non-linear scaling: calculates offset based on quadratic easing.
 // Returns the offset amount (not the final value).
 // At min_val: returns (base * min_pct / 100)
 // At max_val: returns (base * max_pct / 100)
 // In between: quadratic interpolation (eases in toward max_pct)
-static inline uint16_t scaled_offset(uint16_t base, uint16_t min_val, uint16_t max_val,
-                                      uint8_t min_pct, uint8_t max_pct) {
+static inline uint16_t scaled_offset(uint16_t base, uint16_t min_val, uint16_t max_val, uint8_t min_pct, uint8_t max_pct) {
     // Clamp base to range boundaries
     if (base <= min_val) return (base * min_pct) / 100;
     if (base >= max_val) return (base * max_pct) / 100;
 
     // Position in range [0..256] for fixed-point math (avoids floating point)
     uint32_t range = max_val - min_val;
-    uint32_t pos = ((uint32_t)(base - min_val) * 256) / range;
+    uint32_t pos   = ((uint32_t)(base - min_val) * 256) / range;
 
     // Quadratic easing: square the position (pos^2 / 256)
     // This makes the curve start slow and accelerate toward max
@@ -1111,73 +1428,40 @@ static inline uint16_t scaled_offset(uint16_t base, uint16_t min_val, uint16_t m
 
     return (base * pct) / 100;
 }
-#endif // QMK_SETTINGS
 
+// Called by get_tapping_term() in quantum/vial.c; 0 means "use TAPPING_TERM".
 uint16_t get_tapping_term_user(uint16_t keycode, keyrecord_t *record) {
-#ifdef QMK_SETTINGS
-    // Use Vial's dynamic tapping term as the base
-    uint16_t base = QS.tapping_term;
-
     switch (keycode) {
         // Shift HRMs (ring fingers): faster tapping term
-        case HRM_R:  // LSFT_T(KC_R)
-        case HRM_E:  // RSFT_T(KC_E)
-            return base - scaled_offset(base, TT_MIN, TT_MAX,
-                                        TT_SHIFT_OFFSET_MIN_PCT, TT_SHIFT_OFFSET_MAX_PCT);
+        case HRM_R: // LSFT_T(KC_R)
+        case HRM_E: // RSFT_T(KC_E)
+            return TAPPING_TERM - scaled_offset(TAPPING_TERM, TT_MIN, TT_MAX, TT_SHIFT_OFFSET_MIN_PCT, TT_SHIFT_OFFSET_MAX_PCT);
 
         // Pinky Alt HRMs: slower tapping term (pinkies need more time)
-        case HRM_S:  // LALT_T(KC_S)
-        case HRM_I:  // LALT_T(KC_I)
-            return base + scaled_offset(base, TT_MIN, TT_MAX,
-                                        TT_PINKY_OFFSET_MIN_PCT, TT_PINKY_OFFSET_MAX_PCT);
+        case HRM_S: // LALT_T(KC_S)
+        case HRM_I: // LALT_T(KC_I)
+            return TAPPING_TERM + scaled_offset(TAPPING_TERM, TT_MIN, TT_MAX, TT_PINKY_OFFSET_MIN_PCT, TT_PINKY_OFFSET_MAX_PCT);
 
         default:
-            return 0;  // Fall back to Vial's dynamic tapping term
+            return 0;
     }
-#else
-    // Fallback when QMK_SETTINGS is not enabled: use compile-time constants
-    switch (keycode) {
-        case HRM_R:
-        case HRM_E:
-            return TAPPING_TERM - 45;
-        default:
-            return TAPPING_TERM;
-    }
-#endif
 }
 
 #ifdef FLOW_TAP_TERM
-uint16_t get_flow_tap_term_user(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode) {
+uint16_t get_flow_tap_term(uint16_t keycode, keyrecord_t *record, uint16_t prev_keycode) {
     // Only apply Flow Tap when following a letter key and no Ctrl/Gui/Alt mods active
     if (get_tap_keycode(prev_keycode) <= KC_Z && (get_mods() & (MOD_MASK_CG | MOD_BIT_LALT)) == 0) {
-#ifdef QMK_SETTINGS
-        // Use Vial's dynamic flow tap term as the base
-        uint16_t base = QS.flow_tap_term;
-
         switch (keycode) {
             // Alt (pinky) HRMs: use base flow tap term (no adjustment)
             case HRM_S:
             case HRM_I:
-                return base;
-
-            // Ctrl (index finger) HRMs: faster flow tap term
-            case HRM_G:  // LCTL_T(KC_G)
-            case HRM_H:  // RCTL_T(KC_H)
-                return base - scaled_offset(base, FT_MIN, FT_MAX,
-                                            FT_CTRL_OFFSET_MIN_PCT, FT_CTRL_OFFSET_MAX_PCT);
-        }
-#else
-        // Fallback when QMK_SETTINGS is not enabled
-        switch (keycode) {
-            case HRM_S:
-            case HRM_I:
                 return FLOW_TAP_TERM;
 
-            case HRM_G:
-            case HRM_H:
-                return FLOW_TAP_TERM - 25;
+            // Ctrl (index finger) HRMs: faster flow tap term
+            case HRM_G: // LCTL_T(KC_G)
+            case HRM_H: // RCTL_T(KC_H)
+                return FLOW_TAP_TERM - scaled_offset(FLOW_TAP_TERM, FT_MIN, FT_MAX, FT_CTRL_OFFSET_MIN_PCT, FT_CTRL_OFFSET_MAX_PCT);
         }
-#endif
     }
 
     return 0; // Disable Flow Tap otherwise.
@@ -1306,8 +1590,8 @@ uint16_t get_alt_repeat_key_keycode_user_override(uint16_t keycode, uint8_t mods
             case KC_B:
                 return MG_EFORE; // B -> EFORE
             case KC_I:
-                //return MG_ON; // I -> ON
-                //return MG_ST; // I -> ST
+                // return MG_ON; // I -> ON
+                // return MG_ST; // I -> ST
                 return MG_NG;
             case KC_J:
                 return MG_UST; // I -> UST
@@ -1367,59 +1651,68 @@ static void magic_send_string_P(const char *str, uint16_t repeat_keycode) {
     }
 }
 
-// ==================== Combo Initialization ====================
-// Prepopulate Vial's combo array with compile-time combos.
-// Called after vial_init() in keyboard_post_init_user().
+// ==================== Combos and Key Overrides ====================
+// Vial serves combos and key overrides only from its EEPROM slots, so the
+// definitions below are written into those slots at boot. Only slots that
+// differ are written, and every slot past the definitions is cleared, so a
+// stray Vial GUI edit (or a stale slot from an older build) is undone on the
+// next boot. vial_init() then reloads Vial's RAM copies from the slots.
 
 #ifdef VIAL_COMBO_ENABLE
-#include "vial.h"
-
-// Combo key sequences stored in PROGMEM
-static const uint16_t combo_caps_keys[] PROGMEM     = {KC_J, KC_COMM, COMBO_END};
-static const uint16_t combo_fn_keys[] PROGMEM       = {KC_F, HRM_N, COMBO_END};
-static const uint16_t combo_commdot_keys[] PROGMEM  = {KC_COMM, KC_DOT, COMBO_END};
-
-// Combo definitions: {keys_progmem_ptr, output_keycode}
-static const struct {
-    const uint16_t *keys;
-    uint16_t output;
-} user_combos[] = {
-    {combo_caps_keys,    CW_TOGG},     // J + , => Caps Word
-    {combo_fn_keys,      OSL(FUNC)},   // F + N => FUNC layer
-    {combo_commdot_keys, KC_SCLN},     // , + . => semicolon
+static const vial_combo_entry_t user_combos[] = {
+    {.input = {KC_J, KC_COMM}, .output = CW_TOGG},   // J + , => Caps Word
+    {.input = {KC_F, HRM_N}, .output = OSL(FUNC)},   // F + N => FUNC layer
+    {.input = {KC_COMM, KC_DOT}, .output = KC_SCLN}, // , + . => semicolon
 };
-#define USER_COMBO_COUNT (sizeof(user_combos) / sizeof(user_combos[0]))
-
-// Access Vial's combo arrays (declared in vial.c)
-extern combo_t key_combos[];
-extern uint16_t key_combos_keys[][5];
-
-static void init_user_combos(void) {
-    // Prepopulate Vial's combo array with user-defined combos.
-    // This runs after vial_init() which initializes the arrays.
-    for (size_t i = 0; i < USER_COMBO_COUNT && i < VIAL_COMBO_ENTRIES; ++i) {
-        // Copy keys from PROGMEM to Vial's RAM array
-        for (size_t j = 0; j < 4; ++j) {
-            uint16_t k = pgm_read_word(&user_combos[i].keys[j]);
-            key_combos_keys[i][j] = k;
-            if (k == COMBO_END) break;
-        }
-        key_combos_keys[i][4] = COMBO_END;  // Ensure termination
-
-        // Set up the combo_t entry
-        key_combos[i].keys = key_combos_keys[i];
-        key_combos[i].keycode = user_combos[i].output;
-    }
-}
-#else
-static void init_user_combos(void) {}
+_Static_assert(ARRAY_SIZE(user_combos) <= VIAL_COMBO_ENTRIES, "more combos than Vial combo slots");
 #endif
+
+#ifdef VIAL_KEY_OVERRIDE_ENABLE
+// Same semantics as ko_make_basic(): all layers, no negative mods, trigger mods
+// suppressed, default activation options.
+#    define USER_KO(mods, trigger_kc, replacement_kc) \
+        {.trigger = (trigger_kc), .replacement = (replacement_kc), .layers = 0xFFFF, .trigger_mods = (mods), .negative_mod_mask = 0, .suppressed_mods = (mods), .options = vial_ko_enabled | vial_ko_option_activation_trigger_down | vial_ko_option_activation_required_mod_down | vial_ko_option_activation_negative_mod_up}
+
+static const vial_key_override_entry_t user_key_overrides[] = {
+    USER_KO(MOD_MASK_SHIFT, KC_DOT, KC_QUES),  // Shift + . is ?
+    USER_KO(MOD_MASK_SHIFT, KC_COMM, KC_EXLM), // Shift + , is !
+    USER_KO(MOD_MASK_SHIFT, KC_SLSH, KC_BSLS), // Shift + / is B-Slash
+    USER_KO(MOD_MASK_CTRL, KC_MPLY, KC_MNXT),  // Ctrl + Play is Next
+    USER_KO(MOD_MASK_SHIFT, KC_MPLY, KC_MPRV), // Shift + Play is Prev
+};
+_Static_assert(ARRAY_SIZE(user_key_overrides) <= VIAL_KEY_OVERRIDE_ENTRIES, "more key overrides than Vial key override slots");
+#endif
+
+static void sync_vial_slots(void) {
+#ifdef VIAL_COMBO_ENABLE
+    for (uint8_t i = 0; i < VIAL_COMBO_ENTRIES; ++i) {
+        vial_combo_entry_t want = {0}, have;
+        if (i < ARRAY_SIZE(user_combos)) want = user_combos[i];
+        if (dynamic_keymap_get_combo(i, &have) != 0 || memcmp(&want, &have, sizeof(want)) != 0) {
+            dynamic_keymap_set_combo(i, &want);
+        }
+    }
+#endif
+#ifdef VIAL_KEY_OVERRIDE_ENABLE
+    for (uint8_t i = 0; i < VIAL_KEY_OVERRIDE_ENTRIES; ++i) {
+        vial_key_override_entry_t want = {0}, have;
+        if (i < ARRAY_SIZE(user_key_overrides)) want = user_key_overrides[i];
+        if (dynamic_keymap_get_key_override(i, &have) != 0 || memcmp(&want, &have, sizeof(want)) != 0) {
+            dynamic_keymap_set_key_override(i, &want);
+        }
+    }
+#endif
+    // Reload Vial's RAM tables from the slots. Also needed when nothing was
+    // written: vial_init() first ran in keyboard_setup(), before via_init()
+    // could reset the EEPROM for a new build.
+    vial_init();
+}
 
 // ==================== Keyboard Init ====================
 
 void keyboard_post_init_user(void) {
-    // Initialize user-defined combos into Vial's combo array
-    init_user_combos();
+    // Write the combo and key override definitions into Vial's slots
+    sync_vial_slots();
 
     gpio_set_pin_input_high(GP12);
 
@@ -1461,12 +1754,19 @@ void keyboard_post_init_user(void) {
     load_trackpad_enabled();
     load_oled_config();
     os_detection_settings_init();
+    { /* v5.06: load persisted shared sleep timeout, clamp, then mirror to RGB */
+        uint32_t st = eeprom_read_dword((uint32_t *)EEPROM_SLEEP_TIMEOUT_OFFSET);
+        if (st >= MIN_SLEEP_TIMEOUT_MS && st <= MAX_SLEEP_TIMEOUT_MS) g_sleep_timeout = st;
+    }
+    apply_sleep_timeout(); // mirror shared sleep timeout to core RGB timeout
 
     transaction_register_rpc(TP_INFO_SYNC, tp_info_sync_handler);
+    aurora_init();
 
 #if defined(VIALRGB_ENABLE) && !defined(VIALRGB_NO_DIRECT)
     transaction_register_rpc(VIALRGB_DIRECT_SYNC, vialrgb_direct_sync_handler);
     transaction_register_rpc(VIALRGB_INDICATOR_SYNC, vialrgb_indicator_sync_handler);
+    transaction_register_rpc(VIALRGB_INDICATOR_LED_SYNC, vialrgb_indicator_led_sync_handler);
 
     /* Load saved per-key colors from EEPROM. */
     if (eeprom_read_word((const uint16_t *)EEPROM_VIALRGB_COLORS_MAGIC_OFFSET) == VIALRGB_COLORS_EEPROM_MAGIC) {
@@ -1477,9 +1777,20 @@ void keyboard_post_init_user(void) {
     indicator_config_init_defaults();
     if (eeprom_read_word((const uint16_t *)EEPROM_INDICATOR_MAGIC_OFFSET) == INDICATOR_EEPROM_MAGIC) {
         eeprom_read_block(&g_indicator_config, (const void *)EEPROM_INDICATOR_DATA_OFFSET, sizeof(indicator_config_t));
+        /* Per-LED colours: saved table if present, else each role in its own colour
+         * (a config saved by v5.10 or earlier). */
+        if (eeprom_read_word((const uint16_t *)EEPROM_INDICATOR_LED_MAGIC_OFFSET) == INDICATOR_LED_EEPROM_MAGIC) {
+            eeprom_read_block(g_indicator_led_colors, (const void *)EEPROM_INDICATOR_LED_DATA_OFFSET, sizeof(g_indicator_led_colors));
+#    if RGB_MATRIX_LED_COUNT > 64
+            eeprom_read_block(g_indicator_masks_hi, (const void *)(EEPROM_INDICATOR_LED_DATA_OFFSET + sizeof(g_indicator_led_colors)), sizeof(g_indicator_masks_hi));
+#    endif
+        } else {
+            for (uint8_t i = 0; i < INDICATOR_NUM_ROLES; i++)
+                indicator_fill_role_leds(i);
+        }
     }
+    g_indicator_led_dirty = (1u << INDICATOR_NUM_ROLES) - 1;
 #endif
-
 }
 
 // ==================== Matrix Scan ====================
@@ -1551,9 +1862,24 @@ void matrix_scan_user(void) {
 
 // ==================== Pointing Device Task ====================
 
+/* TRACKPAD_TOGGLE off: drop every contact and button before the digitizer
+ * report is built. pointing_device_task_user() below only blanks the
+ * mouse-fallback report; this also covers Precision Touchpad (PTP) hosts.
+ * Fingers that were down are released cleanly, because the core compares
+ * against the previous state. */
+bool digitizer_task_user(digitizer_t *const state) {
+    if (trackpad_enabled) return false;
+    for (int i = 0; i < DIGITIZER_CONTACT_COUNT; i++) {
+        state->contacts[i].tip        = 0;
+        state->contacts[i].in_range   = 0;
+        state->contacts[i].confidence = 0;
+    }
+    state->buttons = 0;
+    return true;
+}
+
 report_mouse_t pointing_device_task_user(report_mouse_t mouse_report) {
     if (!trackpad_enabled) {
-        zoom_cleanup();
         mouse_report.x       = 0;
         mouse_report.y       = 0;
         mouse_report.h       = 0;
@@ -1579,7 +1905,7 @@ report_mouse_t pointing_device_task_user(report_mouse_t mouse_report) {
 // PTP mode (Windows): this function is never called (digitizer_send_mouse_reports=false).
 //
 // scroll_layer:  1-finger movement → 2-finger-style scroll (x→h, y→v)
-// swipe2_layer:  1-finger horizontal movement → browser back/forward (Cmd+[/])
+// swipe2_layer:  1-finger horizontal movement → browser back/forward (WWW Back/Forward keys)
 // swipe3_layer:  1-finger movement → 3-finger swipe keycodes (desktop switch, etc.)
 //
 // ROTATION_270 axis mapping (flip_x=true, switch_xy=true):
@@ -1593,6 +1919,33 @@ report_mouse_t pointing_device_task_user(report_mouse_t mouse_report) {
 #ifndef DIGITIZER_SWIPE3_THRESHOLD
 #    define DIGITIZER_SWIPE3_THRESHOLD 50 // cursor pixels to trigger swipe keycode
 #endif
+
+/* v5.11 FIX: apply the user's scroll-inversion setting.
+ *
+ * scroll_dir_v/h are saved to EEPROM (save_user_settings), exposed to the Vial
+ * GUI as args[2]/[3] of the 0x50 trackpad-settings channel, and toggled by the
+ * SCROLL_DIR_V / SCROLL_DIR_H keycodes -- but nothing ever read them back to
+ * modify a report, so all three controls did nothing.
+ *
+ * Working code existed on the v1 pointing-device path
+ * (sofleplus1/keymaps/vialazo102b/keymap.c:194,219) and was lost when that path
+ * was replaced by the digitizer. Every sofleplus2 keymap from the 501b Archive
+ * onward carries the dead pattern, so this was never a v5.10 regression -- the
+ * toggle has been inert on every unit shipped.
+ *
+ * Called at BOTH exits of digitizer_pre_send_user so it covers both scroll
+ * sources: the core's 2-finger scroll (already in report->v/h by the time we
+ * are called -- digitizer_mouse_fallback.c:480-481 -- which is the early-return
+ * path below) and the 1-finger scroll this function writes on a scroll layer.
+ * Applying it only at the top would let the gesture block overwrite v/h and
+ * silently drop the setting on exactly the layers where scrolling is the point.
+ *
+ * Independent of the compile-time DIGITIZER_SCROLL_INVERT in config.h, which
+ * stays as the macOS natural-scrolling default. */
+static inline void apply_scroll_invert(report_mouse_t *report) {
+    if (scroll_dir_v) report->v = -report->v;
+    if (scroll_dir_h) report->h = -report->h;
+}
 
 void digitizer_pre_send_user(report_mouse_t *report) {
     // Merge keyboard-side mouse buttons (e.g. DIP center = BTN1) into the direct-send report.
@@ -1619,6 +1972,7 @@ void digitizer_pre_send_user(report_mouse_t *report) {
         swipe2_accum   = 0;
         swipe3_h       = 0;
         swipe3_v       = 0;
+        apply_scroll_invert(report); /* v5.11: covers the core 2-finger scroll */
         return;
     }
 
@@ -1645,10 +1999,10 @@ void digitizer_pre_send_user(report_mouse_t *report) {
         // ROTATION_270: report->x = horizontal; negate because RIGHT→negative x
         swipe2_accum -= (int)report->x;
         if (swipe2_accum >= DIGITIZER_SWIPE2_THRESHOLD) {
-            tap_code16(LGUI(KC_RBRC)); // Cmd+] = forward
+            tap_code16(KC_WWW_FORWARD); // browser forward
             swipe2_accum = 0;
         } else if (swipe2_accum <= -DIGITIZER_SWIPE2_THRESHOLD) {
-            tap_code16(LGUI(KC_LBRC)); // Cmd+[ = back
+            tap_code16(KC_WWW_BACK); // browser back
             swipe2_accum = 0;
         }
         report->x = 0;
@@ -1679,6 +2033,8 @@ void digitizer_pre_send_user(report_mouse_t *report) {
         report->x = 0;
         report->y = 0;
     }
+
+    apply_scroll_invert(report); /* v5.11: covers the 1-finger scroll written above */
 }
 
 // ==================== Process Record ====================
@@ -1945,7 +2301,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case TRACKPAD_TOGGLE:
             if (record->event.pressed) {
                 trackpad_enabled = !trackpad_enabled;
-                if (!trackpad_enabled) zoom_cleanup();
+                save_trackpad_enabled();
             }
             break;
 
@@ -2002,7 +2358,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case ZMTOG:
             if (record->event.pressed) {
                 zoom_enabled = !zoom_enabled;
-                if (!zoom_enabled) zoom_cleanup();
                 save_zoom_setting();
             }
             break;
@@ -2022,18 +2377,18 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             return false;
     }
 
-    if (!record->event.pressed) return true;  
+    if (!record->event.pressed) return true;
 
     switch (keycode) {
         /*
             Handle special Magic key patterns:
                 B * -> BEFORE   T * -> TMENT
-                I * -> IST      V * -> VER     
+                I * -> IST      V * -> VER
                 J * -> JUST     W * -> WHICH
-                M * -> MENT     X * -> XES      
+                M * -> MENT     X * -> XES
                 N * -> NION     , * -> ", BUT"
                 Q * -> QUEN     wspc * -> " THE"
-            
+
                 " *   -> """<cursor>"""  (Python code)
                 ` *   -> ```<cursor>```  (Markdown code)
                 . *   -> ../             (shell)
@@ -2153,7 +2508,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 // have lost the key-down event and clear_mods() ensures our internal state
 // matches reality after resume.
 void suspend_wakeup_init_user(void) {
-    zoom_cleanup();
     pinch_cleanup();
     clear_mods();
 }
@@ -2164,46 +2518,23 @@ void suspend_wakeup_init_user(void) {
 #    include "oled_data.h"
 
 // Gesture bitmaps (32x11px each, stored as 64 bytes per bitmap)
-static const char PROGMEM gesture_2finger[] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x0c,
-    0x34, 0x44, 0x84, 0x04, 0x84, 0x44, 0x34, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-    0x00, 0x00, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
+static const char PROGMEM gesture_2finger[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x0c, 0x34, 0x44, 0x84, 0x04, 0x84, 0x44, 0x34, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-static const char PROGMEM gesture_3finger[] = {
-    0x00, 0x00, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x0c, 0x34, 0x44, 0x84, 0x04,
-    0x84, 0x44, 0x34, 0x0c, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x02,
-    0x01, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00
-};
+static const char PROGMEM gesture_3finger[] = {0x00, 0x00, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x0c, 0x34, 0x44, 0x84, 0x04, 0x84, 0x44, 0x34, 0x0c, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x02, 0x01, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00};
 
-static const char PROGMEM gesture_default[] = {
-    0x00, 0x20, 0x20, 0x70, 0xf8, 0xfc, 0xfe, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x84,
-    0x0c, 0x3c, 0xfc, 0xfc, 0xfc, 0x3c, 0x0c, 0x04, 0x00, 0xfe, 0xfc, 0xf8, 0x70, 0x20, 0x20, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-    0x01, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00
-};
+static const char PROGMEM gesture_default[] = {0x00, 0x20, 0x20, 0x70, 0xf8, 0xfc, 0xfe, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x84, 0x0c, 0x3c, 0xfc, 0xfc, 0xfc, 0x3c, 0x0c, 0x04, 0x00, 0xfe, 0xfc, 0xf8, 0x70, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-static const char PROGMEM gesture_scroll[] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x04,
-    0x0c, 0x3c, 0xfc, 0xfc, 0xfc, 0x3c, 0x0c, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-    0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
+static const char PROGMEM gesture_scroll[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xe0, 0xf8, 0xfe, 0xf8, 0xe0, 0x80, 0x04, 0x0c, 0x3c, 0xfc, 0xfc, 0xfc, 0x3c, 0x0c, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 static const char gesture_blank[64] PROGMEM = {0};
 
-/*
-static const char *get_trackpad_gesture_bitmap(uint8_t layer) {
+__attribute__((unused)) static const char *get_trackpad_gesture_bitmap(uint8_t layer) {
     if (user_config.scroll_layers & (1 << layer)) return gesture_scroll;
     if (user_config.swipe2_layers & (1 << layer)) return gesture_2finger;
     if (user_config.swipe3_layers & (1 << layer)) return gesture_3finger;
     return gesture_default;
 }
-*/
-
-static const char *get_trackpad_gesture_bitmap_by_mode(uint8_t mode) {
+__attribute__((unused)) static const char *get_trackpad_gesture_bitmap_by_mode(uint8_t mode) {
     switch (mode) {
         case 1:
             return gesture_scroll;
@@ -2292,7 +2623,7 @@ static void print_status_narrow(void) {
     if (is_slave && !g_slave_sync_valid) {
         oled_write_P(PSTR("SYNC "), false);
     } else if (!d_os_enabled) {
-        oled_write("PLUS+", false);
+        oled_write_P(PSTR("     "), false); // v5.06: blank when no OS to show (OS detection off / PTP / not yet detected); SYNC is only the slave-awaiting-sync state
     } else {
         switch ((os_variant_t)d_os) {
             case OS_MACOS:
@@ -2306,7 +2637,7 @@ static void print_status_narrow(void) {
                 oled_write(" LNX ", false);
                 break;
             default:
-                oled_write("PLUS+", false);
+                oled_write_P(PSTR("     "), false); // v5.06: blank when no OS to show (OS detection off / PTP / not yet detected); SYNC is only the slave-awaiting-sync state
                 break;
         }
     }
@@ -2529,7 +2860,7 @@ oled_rotation_t oled_init_user(oled_rotation_t rotation) {
 bool oled_task_user(void) {
     if (is_keyboard_master()) {
         if (is_oled_on()) {
-            if (last_input_activity_elapsed() > OLED_TIMEOUT) {
+            if (last_input_activity_elapsed() > g_sleep_timeout) {
                 oled_off();
             } else {
                 print_status_narrow();
@@ -2540,7 +2871,7 @@ bool oled_task_user(void) {
         }
     } else {
         if (is_oled_on()) {
-            if (last_input_activity_elapsed() > OLED_TIMEOUT) {
+            if (last_input_activity_elapsed() > g_sleep_timeout) {
                 oled_off();
             } else if (tp_info_active && timer_elapsed32(tp_info_timer) < TP_INFO_DURATION_MS) {
                 print_tp_info_overlay();
@@ -2562,6 +2893,7 @@ bool oled_task_user(void) {
 
 #ifdef CHORDAL_HOLD
 // Handedness for Chordal Hold.
+// clang-format off
 const char chordal_hold_layout[MATRIX_ROWS][MATRIX_COLS] PROGMEM =
 LAYOUT(
         '*',  '*',  '*',  '*',  '*',  '*',               '*',  '*',  '*',  '*',  '*',  '*',
@@ -2571,19 +2903,18 @@ LAYOUT(
                        'L', 'L', 'L', 'L', 'L',     'R', 'R', 'R', 'R', 'R',
                        '*', '*', '*', '*', '*'
 );
+// clang-format on
 
 #endif // CHORDAL_HOLD
 
-// ==================== Squeezing AVR ====================
-
-#ifndef MAGIC_ENABLE
-uint16_t keycode_config(uint16_t keycode) {
-    return keycode;
-}
-#endif
-
-#ifndef MAGIC_ENABLE
-uint8_t mod_config(uint8_t mod) {
-    return mod;
-}
-#endif
+// ==================== Bootmagic: bootloader WITHOUT erasing ====================
+/* v5.11b: hold the three outer top-row keys (columns 0-2) of the half the USB cable
+ * goes into while plugging it in, and the board jumps straight to the RP2040 UF2
+ * bootloader (bootmagic_should_reset() in sofleplus2.c). Stock Bootmagic also clears
+ * EEPROM first (eeconfig_disable()); overriding that with a no-op keeps the keymap
+ * and every setting.
+ *  - A NEWLY BUILT firmware still resets the Vial keymap on its first boot (Vial's
+ *    EEPROM magic is a random BUILD_ID per build); re-flashing the same .uf2 does not.
+ *  - To wipe everything on purpose, use the QK_CLEAR_EEPROM (EE_CLR) key: it resets
+ *    EEPROM and reboots, and keeps the EE_HANDS left/right setting. */
+void bootmagic_reset_eeprom(void) {}

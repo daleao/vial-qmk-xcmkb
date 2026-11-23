@@ -859,17 +859,26 @@ static void digitizer_handlers_slave(matrix_row_t master_matrix[], matrix_row_t 
 
 #if defined(DIP_SWITCH_ENABLE) && defined(SPLIT_DIP_SWITCH_ENABLE)
 
+// Last slave DIP state that passed its checksum. The transport receives straight into
+// split_shmem, so after a failed or corrupted read split_shmem holds the bad bytes, and
+// applying those would fire phantom switch presses. Same idea as last_matrix in
+// slave_matrix_handlers_master().
+static uint32_t dip_switch_slave_state = 0;
+
 static bool dip_switch_handlers_master(matrix_row_t master_matrix[], matrix_row_t slave_matrix[]) {
     static uint32_t last_update = 0;
     uint32_t        temp_state;
     bool            okay = read_if_checksum_mismatch(GET_DIP_SWITCH_CHECKSUM, GET_DIP_SWITCH_DATA, &last_update, &temp_state, &split_shmem->dip_switch.state, sizeof(temp_state));
     if (okay) {
-        // Merge: local master pin state OR slave synced state
-        // Side without physical disc reads 0 (pullup), so OR gives correct state
-        uint32_t merged = dip_switch_read_state() | split_shmem->dip_switch.state;
-        dip_switch_apply_state(merged);
+        dip_switch_slave_state = temp_state;
     }
+    // Always apply the local switches; on a failed read keep the slave's last good state.
+    dip_switch_apply_state(dip_switch_read_state() | dip_switch_slave_state);
     return okay;
+}
+
+void dip_switch_forget_slave(void) {
+    dip_switch_slave_state = 0;
 }
 
 static void dip_switch_handlers_slave(matrix_row_t master_matrix[], matrix_row_t slave_matrix[]) {
@@ -1065,6 +1074,11 @@ split_transaction_desc_t split_transaction_table[NUM_TOTAL_TRANSACTIONS] = {
 };
 
 bool transactions_master(matrix_row_t master_matrix[], matrix_row_t slave_matrix[]) {
+    // DIP switch runs first, before any slave-dependent transaction that may early-return.
+    // This allows the master's local DIP pin to be read even when the slave is not connected.
+#if defined(DIP_SWITCH_ENABLE) && defined(SPLIT_DIP_SWITCH_ENABLE)
+    dip_switch_handlers_master(master_matrix, slave_matrix);
+#endif
     TRANSACTIONS_SLAVE_MATRIX_MASTER();
     TRANSACTIONS_MASTER_MATRIX_MASTER();
     TRANSACTIONS_ENCODERS_MASTER();
@@ -1081,7 +1095,6 @@ bool transactions_master(matrix_row_t master_matrix[], matrix_row_t slave_matrix
     TRANSACTIONS_ST7565_MASTER();
     TRANSACTIONS_POINTING_MASTER();
     TRANSACTIONS_DIGITIZER_MASTER();
-    TRANSACTIONS_DIP_SWITCH_MASTER();
     TRANSACTIONS_WATCHDOG_MASTER();
     TRANSACTIONS_HAPTIC_MASTER();
     TRANSACTIONS_ACTIVITY_MASTER();

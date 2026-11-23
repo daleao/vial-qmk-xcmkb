@@ -1,5 +1,51 @@
 #include "sofleplus2.h"
 
+#ifdef BOOTMAGIC_ENABLE
+/* Bootmagic chord (2026-11-13): hold the three outer keys of the top row of the half the
+ * USB cable goes into: left [0][0] [0][1] [0][2] (Esc/`, 1, 2), right [5][0] [5][1] [5][2]
+ * (Bksp/-, 0, 9). Replaces the stock single corner key so a key resting on the corner
+ * cannot send the board to the bootloader. BOOTMAGIC_LITE_ROW / _ROW_RIGHT (config.h)
+ * pick the row; the keymaps' bootmagic_reset_eeprom() no-op still keeps EEPROM intact. */
+#    define XCMKB_BOOTMAGIC_CHORD 0x07u /* cols 0, 1, 2 */
+bool bootmagic_should_reset(void) {
+    uint8_t row = is_keyboard_left() ? BOOTMAGIC_LITE_ROW : BOOTMAGIC_LITE_ROW_RIGHT;
+    return (matrix_get_row(row) & XCMKB_BOOTMAGIC_CHORD) == XCMKB_BOOTMAGIC_CHORD;
+}
+#endif
+
+#if defined(XCMKB_DTR_MODE) && XCMKB_DTR_MODE == 2
+/* Settled double-tap reset (see post_config.h). Replaces the stock __late_init of
+ * platforms/chibios/bootloaders/rp2040.c, which post_config.h has switched off. The first
+ * XCMKB_DTR_SETTLE_MS after reset are unarmed, so plug-in contact bounce just reboots.
+ * A manual double-tap still works: the second tap 0.3-0.8 s after the first. */
+#    include "hal.h"
+#    include "wait.h"
+#    include "pico/bootrom.h"
+
+#    ifdef RP2040_BOOTLOADER_DOUBLE_TAP_RESET_LED
+#        define XCMKB_DTR_LED_MASK (1U << RP2040_BOOTLOADER_DOUBLE_TAP_RESET_LED)
+#    else
+#        define XCMKB_DTR_LED_MASK 0U
+#    endif
+
+static volatile uint32_t __attribute__((section(".ram0.xcmkb_dtr_magic"))) xcmkb_dtr_magic; /* NOLOAD: survives reset */
+#    define XCMKB_DTR_TOKEN 0xCAFEB0BAu
+
+void __late_init(void) {
+    clocks_init(); /* required before reset_usb_boot(), as in the stock code */
+
+    if (xcmkb_dtr_magic == XCMKB_DTR_TOKEN) {
+        xcmkb_dtr_magic = 0;
+        reset_usb_boot(XCMKB_DTR_LED_MASK, 0U);
+    }
+    xcmkb_dtr_magic = 0;
+    wait_us(XCMKB_DTR_SETTLE_MS * 1000U);
+    xcmkb_dtr_magic = XCMKB_DTR_TOKEN;
+    wait_us(XCMKB_DTR_WINDOW_MS * 1000U);
+    xcmkb_dtr_magic = 0;
+}
+#endif
+
 // RP2040 PAD register: slow down GP0 (WS2812 DIN) output edges.
 // Without C17630 (330Ω series resistor on DIN), fast GPIO edges radiate onto
 // adjacent I2C traces (GP2/GP3), corrupting LED data during IQS5xx touch reads

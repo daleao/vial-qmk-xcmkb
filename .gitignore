@@ -1,61 +1,119 @@
-# =============================================================================
-# Vial-QMK Custom Fork - Selective Tracking
-# =============================================================================
-# This .gitignore excludes the entire vial-qmk base to keep the repo minimal.
-# Only custom keymap(s) and surgically modified core files are tracked.
-#
-# To use this fork:
-#   1. Clone the official vial-qmk repository
-#   2. Apply these tracked files on top
-#   3. Build normally with: qmk compile -kb xcmkb/sofleplus2 -km arleo
-# =============================================================================
+# Junk files
+*.bak
+*.swp
+*~
+.DS_Store
+._*
 
-# Ignore everything by default
-*
+# Merge files
+*.orig
+*.rej
 
-# =============================================================================
-# CUSTOM KEYMAP - Track arleo keymap only
-# =============================================================================
-!keyboards/
-!keyboards/xcmkb/
-!keyboards/xcmkb/sofleplus2/
-!keyboards/xcmkb/sofleplus2/keymaps/
-!keyboards/xcmkb/sofleplus2/keymaps/arleo/
-!keyboards/xcmkb/sofleplus2/keymaps/arleo/**
+# Build artifacts
+.clang_complete
+.build/
+*.elf
+*.log
+*.lss
+*.lst
+*.map
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.la
+*.stackdump
+*.sym
+index.html
+firmware_list.json
 
-# Ignore board-level config (not keymap-specific)
-keyboards/xcmkb/sofleplus2/config.h
+# QMK-specific
+api_data/v1
+quantum/version.h
+*.bin
+*.eep
+*.hex
+*.qmk
+*.uf2
+*.vfw
 
-# =============================================================================
-# MODIFIED VIAL CORE FILES
-# User callback hooks for tapping term, flow tap, alt repeat key
-# =============================================================================
-!quantum/
-!quantum/vial.c
-!quantum/vial.h
-!quantum/qmk_settings.c
-!quantum/qmk_settings.h
+# DD config at wrong location
+/keyboards/**/keymaps/*/info.json
+/keyboards/**/keymaps/*/keyboard.json
 
-# Ignore other quantum files
-quantum/unicode/
+# Old-style QMK Makefiles
+/keyboards/**/Makefile
 
-# =============================================================================
-# REPO METADATA
-# =============================================================================
-!.gitignore
-!README.md
+# kbfirmware....
+/keyboards/**/kb.h
+/keyboards/**/kb.c
 
-# =============================================================================
-# BUILD ARTIFACTS - Always ignore
-# =============================================================================
-**/*.o
-**/*.d
-**/*.elf
-**/*.hex
-**/*.bin
-**/*.uf2
-**/*.map
-**/*.lst
-**/*.sym
-**/.build/
-**/build/
+# Eclipse/PyCharm/Other IDE Settings
+*.iml
+.browse.VC.db*
+.cproject
+.idea
+.idea/
+.project
+.settings/
+
+# ?
+.dep
+.history/
+build/
+cmake-build-debug
+CMakeLists.txt
+*.pdf
+
+# Let these ones be user specific, since we have so many different configurations
+*.code-workspace
+.stfolder
+.tags
+.vscode/c_cpp_properties.json
+.vscode/ipch/
+.vscode/last.sql
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/temp.sql
+tags
+
+# Ignore image/font files
+*.bmp
+*.wbmp
+*.gif
+*.jpg
+*.jpeg
+*.png
+*.apng
+*.mng
+*.svg
+*.webp
+*.webm
+*.avi
+*.mp4
+*.mpeg
+*.ttf
+*.otf
+
+# Things Travis sees
+/.vs
+id_rsa_*
+secrets.tar
+
+# Python things
+__pycache__
+.python-version
+.venv
+
+# Prerequisites for updating ChibiOS
+/util/fmpp*
+
+# Allow to exist but don't include it in the repo
+user_song_list.h
+
+# clangd
+compile_commands.json
+.clangd/
+.cache/
+
